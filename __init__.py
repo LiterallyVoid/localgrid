@@ -14,8 +14,15 @@ bl_info = {
 import bpy, mathutils, bmesh, math
 from bpy.app.handlers import persistent
 
+grid_origin_empty_name = "Grid snap: Grid Origin Empty"
+
 def create_transformed_empty(context, matrix: mathutils.Matrix):
-    empty = bpy.data.objects.new(name = "Grid Origin Empty", object_data = None)
+    try:
+        empty = bpy.data.objects[grid_origin_empty_name]
+        if empty.users > 0:
+            raise ValueError
+    except:
+        empty = bpy.data.objects.new(name = grid_origin_empty_name, object_data = None)
 
     empty.matrix_world = matrix.inverted()
 
@@ -102,22 +109,6 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 else:
                     bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll)
 
-            continue
-
-            view_rotation_euler = region.data.view_rotation.to_euler(order)
-            roll_amount = -view_rotation_euler.y + view_roll
-
-            print("2.", region.data.view_rotation.to_euler(order))
-
-            print(f"Roll: {view_roll} -> {view_rotation_euler.y} -> offset {roll_amount} => {view_rotation_euler.y + roll_amount}")
-            print(view_rotation_euler)
-
-            if not interpolated or True:
-                view_rotation_euler.y += roll_amount
-                region.data.view_rotation = view_rotation_euler.to_quaternion()
-                continue
-
-
 def clear_grid_transform(context):
     if context.scene.grid_origin is None:
         return
@@ -145,17 +136,44 @@ def clear_grid_transform(context):
     apply_matrix_to_misc_scene(context, parent_matrix_inverted)
     apply_matrix_to_misc_view(context, parent_matrix_inverted)
 
-def set_grid_transform(context, transform: mathutils.Matrix):
-    if context.scene.grid_origin is not None:
-        clear_grid_transform(context)
+# Remove the scale component of `matrix`
+def remove_scale(matrix: mathutils.Matrix) -> mathutils.Matrix:
+    translation, rotation, _ = matrix.decompose()
+    return mathutils.Matrix.Translation(translation) @ rotation.to_matrix().to_4x4()
 
-    _, orientation, _ = transform.decompose()
+# Reduce the rotation of `matrix`, so that it has minimal deflection of the Z axis.
+def reduce_transform(matrix: mathutils.Matrix) -> mathutils.Matrix:
+    translation, rotation, _ = matrix.decompose()
 
-    transforms = [
+    cardinal_axes = [
+        mathutils.Quaternion(),
+        mathutils.Quaternion((1, 0, 0), math.pi * 0.5),
+        mathutils.Quaternion((1, 0, 0), math.pi),
+        mathutils.Quaternion((1, 0, 0), math.pi * 1.5),
+        mathutils.Quaternion((0, 1, 0), math.pi * 0.5),
+        mathutils.Quaternion((0, 1, 0), math.pi * 1.5),
     ]
 
-    for axis in range(3):
-        for 
+    scored = []
+
+    for mod in cardinal_axes:
+        up = rotation @ mod @ mathutils.Vector((0, 0, 1))
+        score = up.dot((0, 0, 1))
+
+        scored.append((matrix @ mod.to_matrix().to_4x4() , score))
+
+    scored.sort(key = lambda tup: tup[1])
+    
+    return scored[-1][0]
+
+def set_grid_transform(context, transform: mathutils.Matrix):
+    preferences = context.preferences
+    addon_prefs = preferences.addons[__name__].preferences
+
+    transform = remove_scale(transform)
+    transform = reduce_transform(transform)
+    if context.scene.grid_origin is not None:
+        clear_grid_transform(context)
 
     assert context.scene.grid_origin is None
 
@@ -171,6 +189,9 @@ def set_grid_transform(context, transform: mathutils.Matrix):
     apply_matrix_to_misc_scene(context, transform)
     apply_matrix_to_misc_view(context, transform)
 
+    if addon_prefs.move_cursor_to_origin:
+        context.scene.cursor.matrix = mathutils.Matrix()
+
 bpy.types.Scene.grid_origin = bpy.props.PointerProperty(type=bpy.types.Object, name="Grid Origin", description="The Empty currently set as the Grid Origin. Its transform is the inverse transform of the current grid transform", options=set())
 
 class GridSnapAddonPreferences(bpy.types.AddonPreferences):
@@ -180,11 +201,18 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
         name="Reset roll",
         description="Roll the camera so that it points up whenever the grid is changed. This makes navigation smoother if your orbit method is Turntable; this orientation change can be disorienting",
         default=True
-   )
+    )
+
+    move_cursor_to_origin: bpy.props.BoolProperty(
+        name="Move cursor to origin",
+        description="Move the cursor to the origin whenever the grid origin is set",
+        default=True
+    )
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "reset_roll")
+        layout.prop(self, "move_cursor_to_origin")
 
 class SetGridOriginFromObject(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_object"
@@ -305,7 +333,7 @@ def register():
     bpy.utils.register_class(GridSnapAddonPreferences)
     bpy.utils.register_class(SetGridOriginFromObject)
     bpy.utils.register_class(SetGridOriginFromFace)
-    bpy.utils.register_class(CenterGridOrigin)
+    # bpy.utils.register_class(CenterGridOrigin)
     bpy.utils.register_class(ClearGridOrigin)
     bpy.types.VIEW3D_MT_view.append(menu_func)
 
