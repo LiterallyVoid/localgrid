@@ -12,6 +12,7 @@ bl_info = {
 }
 
 import bpy, mathutils, bmesh, math
+from bpy.app.handlers import persistent
 
 def create_transformed_empty(context, matrix: mathutils.Matrix):
     empty = bpy.data.objects.new(name = "Grid Origin Empty", object_data = None)
@@ -72,13 +73,41 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
             if region.data.is_orthographic_side_view:
                 continue
 
-            region.data.view_rotation = rotation @ region.data.view_rotation
+            old = region.data.view_rotation
+            naive = rotation @ region.data.view_rotation
 
             if not addon_prefs.reset_roll:
+                region.data.view_rotation = naive
                 continue
 
+            forwards = region.data.view_rotation @ mathutils.Vector((0, 0, 1))
+
+            forwards = rotation @ forwards
+
+            tracked = forwards.to_track_quat('Z', 'Y')
+
+            previous_roll = old.to_euler(order).y
+            # tracked = tracked @ mathutils.Quaternion((0, 1, 0), -previous_roll)
+
+            delta_from_naive = naive.inverted() @ tracked
+            roll = -delta_from_naive.to_euler(order).z
+
+            region.data.view_rotation = naive
+
+            region.data.update()
+
+            with context.temp_override(view = space, region = region):
+                if interpolated:
+                    bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
+                else:
+                    bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll)
+
+            continue
+
             view_rotation_euler = region.data.view_rotation.to_euler(order)
-            roll_amount = -view_rotation_euler.y + view_roll + 0.1
+            roll_amount = -view_rotation_euler.y + view_roll
+
+            print("2.", region.data.view_rotation.to_euler(order))
 
             print(f"Roll: {view_roll} -> {view_rotation_euler.y} -> offset {roll_amount} => {view_rotation_euler.y + roll_amount}")
             print(view_rotation_euler)
@@ -88,12 +117,6 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 region.data.view_rotation = view_rotation_euler.to_quaternion()
                 continue
 
-            region.data.update()
-
-            with context.temp_override(view = space, region = region):
-                # bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll_amount)
-                bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll_amount)
-            print(region.data.view_rotation.to_euler(order))
 
 def clear_grid_transform(context):
     if context.scene.grid_origin is None:
@@ -125,6 +148,14 @@ def clear_grid_transform(context):
 def set_grid_transform(context, transform: mathutils.Matrix):
     if context.scene.grid_origin is not None:
         clear_grid_transform(context)
+
+    _, orientation, _ = transform.decompose()
+
+    transforms = [
+    ]
+
+    for axis in range(3):
+        for 
 
     assert context.scene.grid_origin is None
 
@@ -245,9 +276,12 @@ def menu_func(self, context):
     self.layout.separator()
     self.layout.operator(SetGridOriginFromObject.bl_idname)
     self.layout.operator(SetGridOriginFromFace.bl_idname)
+    self.layout.operator(CenterGridOrigin.bl_idname)
     self.layout.operator(ClearGridOrigin.bl_idname)
 
 history_pre_matrix = None
+
+@persistent
 def history_pre_handler(scene):
     global history_pre_matrix
 
@@ -256,8 +290,7 @@ def history_pre_handler(scene):
     else:
         history_pre_matrix = mathutils.Matrix()
 
-    print("Before re/undo:", scene, scene.grid_origin)
-
+@persistent
 def history_post_handler(scene):
     global history_pre_matrix
     
@@ -268,13 +301,11 @@ def history_post_handler(scene):
 
     apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix, interpolated = False)
 
-    print("After re/undo:", scene, scene.grid_origin)
-
 def register():
     bpy.utils.register_class(GridSnapAddonPreferences)
     bpy.utils.register_class(SetGridOriginFromObject)
     bpy.utils.register_class(SetGridOriginFromFace)
-    # bpy.utils.register_class(SetGridOriginFront)
+    bpy.utils.register_class(CenterGridOrigin)
     bpy.utils.register_class(ClearGridOrigin)
     bpy.types.VIEW3D_MT_view.append(menu_func)
 
