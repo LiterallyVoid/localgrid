@@ -171,7 +171,10 @@ def set_grid_transform(context, transform: mathutils.Matrix):
     addon_prefs = preferences.addons[__name__].preferences
 
     transform = remove_scale(transform)
-    transform = reduce_transform(transform)
+
+    if addon_prefs.minimize_roll:
+        transform = reduce_transform(transform)
+
     if context.scene.grid_origin is not None:
         clear_grid_transform(context)
 
@@ -182,6 +185,9 @@ def set_grid_transform(context, transform: mathutils.Matrix):
 
     for object in context.scene.objects:
         if object == parent:
+            continue
+
+        if object.parent is not None:
             continue
         
         object.parent = parent
@@ -198,13 +204,19 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
     reset_roll: bpy.props.BoolProperty(
-        name="Reset roll",
+        name="Reset Roll",
         description="Roll the camera so that it points up whenever the grid is changed. This makes navigation smoother if your orbit method is Turntable; this orientation change can be disorienting",
         default=True
     )
 
+    minimize_roll: bpy.props.BoolProperty(
+        name="Minimize Roll",
+        description="Instead of always aligning the +Z axis to the object or face, align whichever axis requires the least roll",
+        default=True
+    )
+
     move_cursor_to_origin: bpy.props.BoolProperty(
-        name="Move cursor to origin",
+        name="Move Cursor to Origin",
         description="Move the cursor to the origin whenever the grid origin is set",
         default=True
     )
@@ -212,11 +224,12 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "reset_roll")
+        layout.prop(self, "minimize_roll")
         layout.prop(self, "move_cursor_to_origin")
 
 class SetGridOriginFromObject(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_object"
-    bl_label = "Set grid origin to object"
+    bl_label = "Set grid origin from object"
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -234,7 +247,7 @@ class SetGridOriginFromObject(bpy.types.Operator):
 
 class SetGridOriginFromFace(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_face"
-    bl_label = "Set grid origin to center on face"
+    bl_label = "Set grid origin from face"
     bl_description = "Position the center of the grid on this face, with its front side facing +Z"
 
     bl_options = {'REGISTER', 'UNDO'}
@@ -264,6 +277,17 @@ class SetGridOriginFromFace(bpy.types.Operator):
 
         origin = face.calc_center_median()
         up = face.normal.normalized()
+
+        longest_edge = 0
+        longest_edge_length = 0
+
+        for i, edge in enumerate(face.edges):
+            edge_length = (edge.verts[1].co - edge.verts[0].co).magnitude
+            if edge_length <= longest_edge_length:
+                continue
+
+            longest_edge = i
+            longest_edge_length = edge_length
 
         front_edge = face.edges[self.twist % len(face.edges)]
         front = front_edge.verts[1].co - front_edge.verts[0].co
