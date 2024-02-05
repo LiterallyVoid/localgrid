@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Grid snap",
-    "author": "Your Name Here",
+    "name": "Grid Snap",
+    "author": "LiterallyVoid",
     "version": (1, 0),
     "blender": (4, 0, 0),
     "location": "3D View",
-    "description": "Example Add-on",
+    "description": "Orient the grid ",
     "warning": "",
     "doc_url": "",
     "tracker_url": "",
@@ -60,54 +60,55 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
     context.scene.cursor.matrix = matrix @ context.scene.cursor.matrix
 
     # Correct the active 3D View's view
-    for area in [context.area]:
-        space = area.spaces[0]
+    for screen in context.workspace.screens:
+        for area in screen.areas:
+            space = area.spaces[0]
 
-        if space.type != 'VIEW_3D':
-            continue
-
-        for region in area.regions:
-            if region.type != 'WINDOW':
+            if space.type != 'VIEW_3D':
                 continue
 
-            order = "XZY"
+            for region in area.regions:
+                if region.type != 'WINDOW':
+                    continue
 
-            view_roll = region.data.view_rotation.to_euler(order).y
+                order = "XZY"
 
-            region.data.view_location = rotation_matrix @ region.data.view_location
-            region.data.view_location += translation
+                view_roll = region.data.view_rotation.to_euler(order).y
 
-            if region.data.is_orthographic_side_view:
-                continue
+                region.data.view_location = rotation_matrix @ region.data.view_location
+                region.data.view_location += translation
 
-            old = region.data.view_rotation
-            naive = rotation @ region.data.view_rotation
+                if region.data.is_orthographic_side_view:
+                    continue
 
-            if not addon_prefs.reset_roll:
+                old = region.data.view_rotation
+                naive = rotation @ region.data.view_rotation
+
+                if not addon_prefs.reset_roll:
+                    region.data.view_rotation = naive
+                    continue
+
+                forwards = region.data.view_rotation @ mathutils.Vector((0, 0, 1))
+
+                forwards = rotation @ forwards
+
+                tracked = forwards.to_track_quat('Z', 'Y')
+
+                previous_roll = old.to_euler(order).y
+                # tracked = tracked @ mathutils.Quaternion((0, 1, 0), -previous_roll)
+
+                delta_from_naive = naive.inverted() @ tracked
+                roll = -delta_from_naive.to_euler(order).z
+
                 region.data.view_rotation = naive
-                continue
 
-            forwards = region.data.view_rotation @ mathutils.Vector((0, 0, 1))
+                region.data.update()
 
-            forwards = rotation @ forwards
-
-            tracked = forwards.to_track_quat('Z', 'Y')
-
-            previous_roll = old.to_euler(order).y
-            # tracked = tracked @ mathutils.Quaternion((0, 1, 0), -previous_roll)
-
-            delta_from_naive = naive.inverted() @ tracked
-            roll = -delta_from_naive.to_euler(order).z
-
-            region.data.view_rotation = naive
-
-            region.data.update()
-
-            with context.temp_override(view = space, region = region):
-                if interpolated:
-                    bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
-                else:
-                    bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll)
+                with context.temp_override(screen = screen, area = area, view = space, region = region):
+                    if interpolated:
+                        bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
+                    else:
+                        bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll)
 
 def clear_grid_transform(context):
     if context.scene.grid_origin is None:
@@ -121,8 +122,6 @@ def clear_grid_transform(context):
 
     context.scene.grid_origin = None
 
-    context.scene.collection.objects.unlink(parent)
-
     for object in context.scene.objects:
         if object == parent:
             continue
@@ -131,7 +130,12 @@ def clear_grid_transform(context):
             object.parent = None
             continue
 
+        if object.parent is not None:
+            continue
+
         object.matrix_world = parent_matrix @ object.matrix_world
+
+    context.scene.collection.objects.unlink(parent)
 
     apply_matrix_to_misc_scene(context, parent_matrix_inverted)
     apply_matrix_to_misc_view(context, parent_matrix_inverted)
@@ -252,7 +256,22 @@ class SetGridOriginFromFace(bpy.types.Operator):
 
     bl_options = {'REGISTER', 'UNDO'}
 
-    twist: bpy.props.IntProperty(name="Twist")
+    align_to: bpy.props.EnumProperty(
+        name="Align to",
+        items=[
+            ('VERTEX', "Vertex", "Align vertex to a cardinal axis, starting from the first vertex of the longest edge"),
+            ('EDGE', "Edge", "Align edge along a cardinal axis, starting from the longest edge"),
+        ],
+        default='EDGE',
+        options={'SKIP_SAVE'},
+    )
+    twist: bpy.props.IntProperty(name="Twist", options={'SKIP_SAVE'})
+    angle_offset: bpy.props.FloatProperty(name="Angle Offset", unit='ROTATION', options={'SKIP_SAVE'})
+
+    def draw(self, context):
+        self.layout.row().prop(self, "align_to", expand=True)
+        self.layout.prop(self, "twist")
+        self.layout.prop(self, "angle_offset")
 
     @classmethod
     def poll(cls, context):
@@ -292,6 +311,9 @@ class SetGridOriginFromFace(bpy.types.Operator):
         front_edge = face.edges[self.twist % len(face.edges)]
         front = front_edge.verts[1].co - front_edge.verts[0].co
 
+        if self.align_to == 'VERTEX':
+            front = front_edge.verts[0].co - origin
+
         back = -front
 
         right = back.cross(up).normalized()
@@ -304,6 +326,8 @@ class SetGridOriginFromFace(bpy.types.Operator):
             origin.to_4d(),
         )).transposed()
 
+        mat = mat @ mathutils.Matrix.Rotation(self.angle_offset, 4, 'Z')
+
         dg = context.evaluated_depsgraph_get()
         mat = context.active_object.evaluated_get(dg).matrix_world @ mat
 
@@ -314,6 +338,7 @@ class SetGridOriginFromFace(bpy.types.Operator):
 class ClearGridOrigin(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_clear"
     bl_label = "Clear grid origin"
+    bl_description = "Reset grid back to the scene's origin"
 
     @classmethod
     def poll(cls, context):
@@ -323,13 +348,6 @@ class ClearGridOrigin(bpy.types.Operator):
         clear_grid_transform(context)
 
         return {'FINISHED'}
-
-def menu_func(self, context):
-    self.layout.separator()
-    self.layout.operator(SetGridOriginFromObject.bl_idname)
-    self.layout.operator(SetGridOriginFromFace.bl_idname)
-    self.layout.operator(CenterGridOrigin.bl_idname)
-    self.layout.operator(ClearGridOrigin.bl_idname)
 
 history_pre_matrix = None
 
@@ -352,6 +370,13 @@ def history_post_handler(scene):
         matrix = mathutils.Matrix()
 
     apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix, interpolated = False)
+
+def menu_func(self, context):
+    self.layout.separator()
+    self.layout.operator(SetGridOriginFromObject.bl_idname)
+    self.layout.operator(SetGridOriginFromFace.bl_idname)
+    # self.layout.operator(CenterGridOrigin.bl_idname)
+    self.layout.operator(ClearGridOrigin.bl_idname)
 
 def register():
     bpy.utils.register_class(GridSnapAddonPreferences)
