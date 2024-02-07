@@ -4,7 +4,7 @@ bl_info = {
     "version": (1, 0),
     "blender": (4, 0, 0),
     "location": "3D View",
-    "description": "Orient the grid ",
+    "description": "",
     "warning": "",
     "doc_url": "",
     "tracker_url": "",
@@ -14,7 +14,7 @@ bl_info = {
 import bpy, mathutils, bmesh, math
 from bpy.app.handlers import persistent
 
-grid_origin_empty_name = "Grid snap: Grid Origin Empty"
+grid_origin_empty_name = "Grid Snap: Grid Origin Empty"
 
 def create_transformed_empty(context, matrix: mathutils.Matrix):
     try:
@@ -25,6 +25,11 @@ def create_transformed_empty(context, matrix: mathutils.Matrix):
         empty = bpy.data.objects.new(name = grid_origin_empty_name, object_data = None)
 
     empty.matrix_world = matrix.inverted()
+
+    if empty.parent:
+        # This happened in testing. I hope that it was because of a transient state being saved because of an addon crash, but if it ever happens then it will be very bad. (The exact issue was that this empty was being parented to itself, which indicates that a lot of things had gone very wrong in Blender's data model.)
+        print("This should never happen!")
+        empty.parent = None
 
     context.scene.collection.objects.link(empty)
 
@@ -104,11 +109,12 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
 
                 region.data.update()
 
-                with context.temp_override(screen = screen, area = area, view = space, region = region):
-                    if interpolated:
+                # FIXME: Interpolation doesn't work well at all.
+                if interpolated and False:
+                    with context.temp_override(screen = screen, area = area, view = space, region = region):
                         bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
-                    else:
-                        bpy.ops.view3d.view_roll('EXEC_REGION_WIN', angle = -roll)
+                else:
+                    region.data.view_rotation = tracked
 
 def clear_grid_transform(context):
     if context.scene.grid_origin is None:
@@ -117,8 +123,8 @@ def clear_grid_transform(context):
     parent = context.scene.grid_origin
 
     # Backwards, because the empty's transform is the inverse of the current grid transform!
-    parent_matrix_inverted = parent.matrix_world
-    parent_matrix = parent.matrix_world.inverted()
+    grid_matrix_inverted = parent.matrix_world
+    grid_matrix = parent.matrix_world.inverted()
 
     context.scene.grid_origin = None
 
@@ -133,12 +139,12 @@ def clear_grid_transform(context):
         if object.parent is not None:
             continue
 
-        object.matrix_world = parent_matrix @ object.matrix_world
+        object.matrix_world = grid_matrix @ object.matrix_world
 
     context.scene.collection.objects.unlink(parent)
 
-    apply_matrix_to_misc_scene(context, parent_matrix_inverted)
-    apply_matrix_to_misc_view(context, parent_matrix_inverted)
+    apply_matrix_to_misc_scene(context, grid_matrix_inverted)
+    apply_matrix_to_misc_view(context, grid_matrix_inverted)
 
 # Remove the scale component of `matrix`
 def remove_scale(matrix: mathutils.Matrix) -> mathutils.Matrix:
@@ -231,113 +237,196 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "minimize_roll")
         layout.prop(self, "move_cursor_to_origin")
 
-class SetGridOriginFromObject(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_set_object"
-    bl_label = "Set grid origin from object"
+def matrix_from_axes(
+    origin: mathutils.Vector,
+    up_vector: mathutils.Vector,
+    front_vector: mathutils.Vector,
+) -> mathutils.Matrix:
+    back = -front_vector
 
-    bl_options = {'REGISTER', 'UNDO'}
+    right = back.cross(up_vector).normalized()
+    back = up_vector.cross(right).normalized()
 
-    @classmethod
-    def poll(cls, context):
-        return context.active_object is not None and context.active_object != context.scene.grid_origin
+    mat = mathutils.Matrix((
+        mathutils.Vector((*right, 0)),
+        mathutils.Vector((*back, 0)),
+        mathutils.Vector((*up_vector, 0)),
+        origin.to_4d(),
+    )).transposed()
 
-    def execute(self, context):
-        clear_grid_transform(context)
+    return mat
 
-        dg = context.evaluated_depsgraph_get()
-        set_grid_transform(context, context.active_object.evaluated_get(dg).matrix_world)
+def bmesh_face_axes(
+    face: bmesh.types.BMFace,
+    edge_index: int,
+    align_vertex_instead_of_edge: bool,
+) -> (mathutils.Vector, mathutils.Vector):
+    origin = face.calc_center_median()
+    up = face.normal.normalized()
 
-        return {'FINISHED'}
+    longest_edge = 0
+    longest_edge_length = 0
 
-class SetGridOriginFromFace(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_set_face"
-    bl_label = "Set grid origin from face"
-    bl_description = "Position the center of the grid on this face, with its front side facing +Z"
+    for i, edge in enumerate(face.edges):
+        edge_length = (edge.verts[1].co - edge.verts[0].co).magnitude
+        if edge_length <= longest_edge_length:
+            continue
+
+        longest_edge = i
+        longest_edge_length = edge_length
+
+    front_edge = face.edges[edge_index % len(face.edges)]
+    front = front_edge.verts[1].co - front_edge.verts[0].co
+
+    if align_vertex_instead_of_edge:
+        front = front_edge.verts[0].co - origin
+
+    return (origin, up, front)
+
+GLOBAL_visualization_gizmo_handle = None
+
+class SetGridOrigin(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_set"
+    bl_label = "Set Grid Origin"
+    bl_description = "Set grid origin from active object, face, vertex, or bone"
 
     bl_options = {'REGISTER', 'UNDO'}
 
     align_to: bpy.props.EnumProperty(
         name="Align to",
         items=[
-            ('VERTEX', "Vertex", "Align vertex to a cardinal axis, starting from the first vertex of the longest edge"),
-            ('EDGE', "Edge", "Align edge along a cardinal axis, starting from the longest edge"),
+            ('DEFAULT', "#DEFAULT!", "..."),
+            ('OBJECT', "Object", "Align grid to the active object"),
+            ('FACE_VERTEX', "Face Vertex", "Align grid to the active face with one vertex lying on a cardinal axis, starting from the first vertex of the longest edge"),
+            ('FACE_EDGE', "Face Edge", "Align grid to the active face with one of its edges along a cardinal axis, starting from the longest edge"),
+            ('BONE', "Bone", "Align grid to the active bone")
         ],
-        default='EDGE',
+        default='DEFAULT',
         options={'SKIP_SAVE'},
     )
-    twist: bpy.props.IntProperty(name="Twist", options={'SKIP_SAVE'})
-    angle_offset: bpy.props.FloatProperty(name="Angle Offset", unit='ROTATION', options={'SKIP_SAVE'})
 
-    def draw(self, context):
-        self.layout.row().prop(self, "align_to", expand=True)
-        self.layout.prop(self, "twist")
-        self.layout.prop(self, "angle_offset")
+    face_twist: bpy.props.IntProperty(name="Twist", options={'SKIP_SAVE'})
+    face_angle_offset: bpy.props.FloatProperty(name="Angle Offset", unit='ROTATION', options={'SKIP_SAVE'})
+
+    bone_head_tail: bpy.props.FloatProperty(name="Head/Tail", min=0.0, max=1.0, subtype="FACTOR")
+
+    _draw_handle: object = None
+
+    @staticmethod
+    def poll_object(context):
+        return context.active_object is not None
+
+    @staticmethod
+    def poll_face(context):
+        # My intuition is that going from edit mesh -> bmesh is expensive, so skip it and just assume there'll be an active face. This may be wrong!
+        return context.mode == 'EDIT_MESH' 
+
+    @staticmethod
+    def poll_bone(context):
+        # Assumption: context.active_pose_bone is `True` iff there's an active bone and the context is in pose mode.
+        return (context.mode == 'EDIT_ARMATURE' or context.mode == 'POSE') and context.active_bone is not None
 
     @classmethod
     def poll(cls, context):
-        if context.mode != 'EDIT_MESH': return False
+        return cls.poll_object(context) or cls.poll_face(context) or cls.poll_bone(context)
 
-        data = context.active_object.data
-        bm = bmesh.from_edit_mesh(data)
+    def draw(self, context):
+        row = self.layout.row(align = True)
 
-        if bm.faces.active is None: return False
+        if self.poll_object(context):
+            row.prop_enum(self, "align_to", 'OBJECT')
 
-        bm.free()
 
-        return True
+        if self.poll_face(context):
+            row.prop_enum(self, "align_to", 'FACE_VERTEX')
+            row.prop_enum(self, "align_to", 'FACE_EDGE')
+
+            layout = self.layout.column()
+
+            layout.prop(self, "face_twist")
+            layout.prop(self, "face_angle_offset")
+
+            layout.enabled = self.align_to == 'FACE_VERTEX' or self.align_to == 'FACE_EDGE'
+
+
+        if self.poll_bone(context):
+            row.prop_enum(self, "align_to", 'BONE')
+
+            layout = self.layout.column()
+
+            layout.prop(self, "bone_head_tail")
+
+            layout.enabled = self.align_to == 'BONE'
 
     def execute(self, context):
+        if self.align_to == 'DEFAULT':
+            match context.mode:
+                case 'OBJECT':
+                    self.align_to = 'OBJECT'
+                case 'EDIT_MESH':
+                    self.align_to = 'FACE_EDGE'
+                case 'EDIT_ARMATURE' | 'POSE':
+                    self.align_to = 'BONE'
         clear_grid_transform(context)
 
-        data = context.active_object.data
-        bm = bmesh.from_edit_mesh(data)
-
-        face = bm.faces.active
-
-        origin = face.calc_center_median()
-        up = face.normal.normalized()
-
-        longest_edge = 0
-        longest_edge_length = 0
-
-        for i, edge in enumerate(face.edges):
-            edge_length = (edge.verts[1].co - edge.verts[0].co).magnitude
-            if edge_length <= longest_edge_length:
-                continue
-
-            longest_edge = i
-            longest_edge_length = edge_length
-
-        front_edge = face.edges[self.twist % len(face.edges)]
-        front = front_edge.verts[1].co - front_edge.verts[0].co
-
-        if self.align_to == 'VERTEX':
-            front = front_edge.verts[0].co - origin
-
-        back = -front
-
-        right = back.cross(up).normalized()
-        back = up.cross(right).normalized()
-
-        mat = mathutils.Matrix((
-            mathutils.Vector((*right, 0)),
-            mathutils.Vector((*back, 0)),
-            mathutils.Vector((*up, 0)),
-            origin.to_4d(),
-        )).transposed()
-
-        mat = mat @ mathutils.Matrix.Rotation(self.angle_offset, 4, 'Z')
-
         dg = context.evaluated_depsgraph_get()
-        mat = context.active_object.evaluated_get(dg).matrix_world @ mat
 
-        set_grid_transform(context, mat)
+        # The active object's matrix is required for every snap mode.
+        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
+
+        matrix = None
+
+        match self.align_to:
+            case 'DEFAULT': assert False
+            case 'OBJECT':
+                matrix = active_object_matrix
+            case 'FACE_VERTEX' | 'FACE_EDGE':
+                data = context.active_object.data
+                bm = bmesh.from_edit_mesh(data)
+                face = bm.faces.active
+
+                if face is None:
+                    matrix = active_object_matrix
+                    self.align_to = 'OBJECT'
+                else:
+                    origin, up, front = bmesh_face_axes(
+                        face,
+                        self.face_twist,
+
+                        # align_vertex_instead_of_edge:
+                        self.align_to == 'FACE_VERTEX', 
+                    )
+                    matrix = active_object_matrix @ matrix_from_axes(origin, up, front)
+                    matrix = matrix @ mathutils.Matrix.Rotation(self.face_angle_offset, 4, 'Z')
+
+                bm.free()
+            case 'BONE':
+                bone_matrix = None
+                bone_length = 0
+
+                if context.active_pose_bone is not None:
+                    bone_matrix = context.active_pose_bone.matrix
+                    bone_length = context.active_pose_bone.length
+                elif context.active_bone is not None and isinstance(context.active_bone, bpy.types.EditBone):
+                    bone_matrix = context.active_bone.matrix
+                    bone_length = context.active_bone.length
+                else:
+                    bone_matrix = context.active_bone.matrix_local
+                    bone_length = context.active_bone.length
+
+                bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
+
+                matrix = active_object_matrix @ bone_matrix
+
+        assert matrix is not None
+
+        set_grid_transform(context, matrix)
 
         return {'FINISHED'}
 
 class ClearGridOrigin(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_clear"
-    bl_label = "Clear grid origin"
+    bl_label = "Reset Grid Origin"
     bl_description = "Reset grid back to the scene's origin"
 
     @classmethod
@@ -369,20 +458,16 @@ def history_post_handler(scene):
     else:
         matrix = mathutils.Matrix()
 
-    apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix, interpolated = False)
+    apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix, interpolated = True)
 
 def menu_func(self, context):
     self.layout.separator()
-    self.layout.operator(SetGridOriginFromObject.bl_idname)
-    self.layout.operator(SetGridOriginFromFace.bl_idname)
-    # self.layout.operator(CenterGridOrigin.bl_idname)
+    self.layout.operator(SetGridOrigin.bl_idname)
     self.layout.operator(ClearGridOrigin.bl_idname)
 
 def register():
     bpy.utils.register_class(GridSnapAddonPreferences)
-    bpy.utils.register_class(SetGridOriginFromObject)
-    bpy.utils.register_class(SetGridOriginFromFace)
-    # bpy.utils.register_class(CenterGridOrigin)
+    bpy.utils.register_class(SetGridOrigin)
     bpy.utils.register_class(ClearGridOrigin)
     bpy.types.VIEW3D_MT_view.append(menu_func)
 
@@ -394,9 +479,7 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(GridSnapAddonPreferences)
-    bpy.utils.unregister_class(SetGridOriginFromObject)
-    bpy.utils.unregister_class(SetGridOriginFromFace)
-    # bpy.utils.unregister_class(SetGridOriginFront)
+    bpy.utils.unregister_class(SetGridOrigin)
     bpy.utils.unregister_class(ClearGridOrigin)
     bpy.types.VIEW3D_MT_view.remove(menu_func)
 
