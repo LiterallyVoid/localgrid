@@ -302,8 +302,6 @@ def bmesh_face_axes(
 
     return (origin, up, front_vector)
 
-GLOBAL_visualization_gizmo_handle = None
-
 class SetGridOrigin(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set"
     bl_label = "Set Grid Origin"
@@ -400,7 +398,7 @@ class SetGridOrigin(bpy.types.Operator):
 
         # Experimentally, the editmesh -> bmesh conversion is not the bottleneck. Hopefully this is fine!
         bm = bmesh.from_edit_mesh(data)
-        active = bm.faces.active is not None
+        active = bm.faces.active is not None and bm.faces.active.select
         bm.free()
 
         return active
