@@ -27,11 +27,14 @@ def create_transformed_empty(context, matrix: mathutils.Matrix):
     empty.matrix_world = matrix.inverted()
 
     if empty.parent:
-        # This happened in testing. I hope that it was because of a transient state being saved because of an addon crash, but if it ever happens then it will be very bad. (The exact issue was that this empty was being parented to itself, which indicates that a lot of things had gone very wrong in Blender's data model.)
+        # This maybe happened in testing. I hope that it was either user error or because of a transient state being saved because of an addon crash, but if it ever happens then it will be very bad. (The exact issue was that this empty was being parented to itself, which indicates that a lot of things had gone very wrong in Blender's data model.)
         print("This should never happen!")
         empty.parent = None
 
     context.scene.collection.objects.link(empty)
+
+    empty.select_set(False)
+    empty.hide_set(True)
 
     return empty
 
@@ -166,9 +169,13 @@ def reduce_transform(matrix: mathutils.Matrix) -> mathutils.Matrix:
 
     scored = []
 
-    for mod in cardinal_axes:
+    for i, mod in enumerate(cardinal_axes):
         up = rotation @ mod @ mathutils.Vector((0, 0, 1))
+
         score = up.dot((0, 0, 1))
+
+        # Incentivize not messing up the axes.
+        if i == 0: score += 0.1
 
         scored.append((matrix @ mod.to_matrix().to_4x4() , score))
 
@@ -367,6 +374,7 @@ class SetGridOrigin(bpy.types.Operator):
                     self.align_to = 'FACE_EDGE'
                 case 'EDIT_ARMATURE' | 'POSE':
                     self.align_to = 'BONE'
+
         clear_grid_transform(context)
 
         dg = context.evaluated_depsgraph_get()
@@ -416,6 +424,8 @@ class SetGridOrigin(bpy.types.Operator):
 
                 bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
 
+                # bone_matrix = mathutils.Matrix.Translation((0, 0, 0))
+
                 matrix = active_object_matrix @ bone_matrix
 
         assert matrix is not None
@@ -445,7 +455,7 @@ def history_pre_handler(scene):
     global history_pre_matrix
 
     if scene.grid_origin:
-        history_pre_matrix = scene.grid_origin.matrix_world
+        history_pre_matrix = scene.grid_origin.matrix_world.copy()
     else:
         history_pre_matrix = mathutils.Matrix()
 
@@ -454,11 +464,12 @@ def history_post_handler(scene):
     global history_pre_matrix
     
     if scene.grid_origin:
-        matrix = scene.grid_origin.matrix_world.inverted()
+        matrix = scene.grid_origin.matrix_world
     else:
         matrix = mathutils.Matrix()
 
-    apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix, interpolated = True)
+    apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix.inverted(), interpolated = True)
+    # apply_matrix_to_misc_view(bpy.context, matrix.inverted(), interpolated = False)
 
 def menu_func(self, context):
     self.layout.separator()
