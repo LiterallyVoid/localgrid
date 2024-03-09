@@ -3,7 +3,7 @@ bl_info = {
     "author": "LiterallyVoid",
     "version": (1, 0),
     "blender": (4, 0, 0),
-    "location": "3D View",
+    "location": "View3D > View",
     "description": "",
     "warning": "",
     "doc_url": "",
@@ -301,6 +301,57 @@ def bmesh_face_axes(
         front_vector = edge_v1 - edge_v0
 
     return (origin, up, front_vector)
+
+class SetGridOriginFromVertices(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_set_vertices"
+    bl_label = "Set Grid Origin From Vertices"
+    bl_description = "Set grid origin from three selected vertices"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        if context.mode != 'EDIT_MESH': return False
+        if context.active_object is None: return False
+
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        if len(bm.select_history) != 3:
+            return False
+
+        if not all([isinstance(elem, bmesh.types.BMVert) for elem in bm.select_history]):
+            return False
+
+        return True
+
+    def execute(self, context):
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        center = bm.select_history.active.co
+        front = bm.select_history[1].co - center
+        adjacent = bm.select_history[0].co - center
+        up = adjacent.cross(front)
+
+        if up.magnitude < 1e-12:
+            raise ValueError("colinear")
+
+        dg = context.evaluated_depsgraph_get()
+
+        initial_matrix = mathutils.Matrix()
+        if context.scene.grid_origin is not None:
+            initial_matrix = context.scene.evaluated_get(dg).grid_origin.matrix_world.inverted()
+
+        clear_grid_transform(context, interpolated = True)
+
+        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
+
+        matrix = active_object_matrix @ matrix_from_axes(center, up, front)
+
+        set_grid_transform(context, matrix, initial_matrix, interpolated = True)
+
+        return {'FINISHED'}
 
 class SetGridOrigin(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set"
@@ -661,6 +712,7 @@ def history_post_handler(scene):
 def menu_func(self, context):
     self.layout.separator()
     self.layout.operator(SetGridOrigin.bl_idname)
+    self.layout.operator(SetGridOriginFromVertices.bl_idname)
     self.layout.operator(ClearGridOrigin.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
@@ -671,6 +723,7 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         pie = layout.menu_pie()
         pie.operator(ClearGridOrigin.bl_idname)
+        pie.operator(SetGridOriginFromVertices.bl_idname)
         pie.operator_enum(SetGridOrigin.bl_idname, "align_to")
 
 addon_keymaps = []
@@ -678,6 +731,7 @@ addon_keymaps = []
 def register():
     bpy.utils.register_class(GridSnapAddonPreferences)
     bpy.utils.register_class(SetGridOrigin)
+    bpy.utils.register_class(SetGridOriginFromVertices)
     bpy.utils.register_class(ClearGridOrigin)
 
     bpy.utils.register_class(VIEW3D_MT_local_grid_pie)
@@ -701,6 +755,7 @@ def register():
 def unregister():
     bpy.utils.unregister_class(GridSnapAddonPreferences)
     bpy.utils.unregister_class(SetGridOrigin)
+    bpy.utils.unregister_class(SetGridOriginFromVertices)
     bpy.utils.unregister_class(ClearGridOrigin)
 
     bpy.utils.unregister_class(VIEW3D_MT_local_grid_pie)
