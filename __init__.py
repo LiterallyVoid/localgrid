@@ -84,6 +84,9 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 if region.type != 'WINDOW':
                     continue
 
+                print(dir(region.data))
+                print(repr(region))
+
                 order = "XZY"
 
                 view_roll = region.data.view_rotation.to_euler(order).y
@@ -124,9 +127,10 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 else:
                     region.data.view_rotation = tracked
 
+# Clear grid transform, and return what it was as a Matrix.
 def clear_grid_transform(context, interpolated = True):
     if context.scene.grid_origin is None:
-        return
+        return mathutils.Matrix()
 
     parent = context.scene.grid_origin
 
@@ -154,6 +158,8 @@ def clear_grid_transform(context, interpolated = True):
     apply_matrix_to_misc_scene(context, grid_matrix_inverted)
     apply_matrix_to_misc_view(context, grid_matrix_inverted, interpolated)
 
+    return grid_matrix
+
 # Remove the scale component of `matrix`
 def remove_scale(matrix: mathutils.Matrix) -> mathutils.Matrix:
     translation, rotation, _ = matrix.decompose()
@@ -174,13 +180,13 @@ def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix
 
     scored = []
 
-    print("YAY", previous_matrix.to_quaternion())
+    # @TODO: max(..., key = ...)
     for i, mod in enumerate(cardinal_axes):
         up = rotation @ mod @ mathutils.Vector((0, 0, 1))
 
         score = up.dot((0, 0, 1))
 
-        # Incentivize not changing the Z axis.
+        # Prefer no orientation change.
         if i == 0: score += 0.1
 
         scored.append((matrix @ mod.to_matrix().to_4x4(), score))
@@ -189,7 +195,7 @@ def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix
     
     return scored[-1][0]
 
-# `previous_matrix` may be used to minimize roll.
+# `previous_matrix` will be used to minimize roll.
 def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Optional[mathutils.Matrix] = None, interpolated = True):
     preferences = context.preferences
     addon_prefs = preferences.addons[__name__].preferences
@@ -236,7 +242,7 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
 
     reset_roll: bpy.props.BoolProperty(
         name="Reset Roll",
-        description="Roll the camera so that it points up whenever the grid is changed. This makes navigation smoother if your orbit method is Turntable; this orientation change can be disorienting",
+        description="Roll the camera so that it points up whenever the grid is changed. This makes navigation easier if your orbit method is Turntable; otherwise it can be disorienting",
         default=True
     )
 
@@ -258,11 +264,36 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "minimize_roll")
         layout.prop(self, "move_cursor_to_origin")
 
+def choose_orthogonal_axis(orthogonal_to):
+    orthogonal_to = orthogonal_to.normalized()
+
+    axes = [
+        mathutils.Vector((1, 0, 0)),
+        mathutils.Vector((0, 1, 0)),
+        mathutils.Vector((0, 0, 1)),
+    ]
+
+    return min(axes, key = lambda axis: abs(axis.dot(orthogonal_to)))
+
+
 def matrix_from_axes(
     origin: mathutils.Vector,
     up_vector: mathutils.Vector,
-    front_vector: mathutils.Vector,
+    front_vector: Optional[mathutils.Vector],
 ) -> mathutils.Matrix:
+    up_vector = up_vector.normalized()
+
+    if front_vector is None:
+        # If there's no front vector given, just choose a random axis?
+        axes = [
+            mathutils.Vector((1, 0, 0)),
+            mathutils.Vector((0, 1, 0)),
+            mathutils.Vector((0, 0, 1)),
+        ]
+
+        # Choose the cardinal axis that's most cardinal from `up`.
+        front_vector = min(axes, key = lambda axis: 1 - abs(axis.dot(up_vector)))
+
     back = -front_vector
 
     right = back.cross(up_vector).normalized()
@@ -277,10 +308,11 @@ def matrix_from_axes(
 
     return mat
 
+# If no `front_vector` is given, choose the longest edge.
 def bmesh_face_axes(
     face: bmesh.types.BMFace,
     front_vector: Optional[mathutils.Vector],
-) -> (mathutils.Vector, mathutils.Vector):
+) -> (mathutils.Vector, mathutils.Vector, mathutils.Vector):
     origin = face.calc_center_median()
     up = face.normal.normalized()
 
@@ -301,6 +333,185 @@ def bmesh_face_axes(
         front_vector = edge_v1 - edge_v0
 
     return (origin, up, front_vector)
+
+class SetGridOriginFromCursor(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_set_cursor"
+    bl_label = "Set Local Grid from Cursor"
+    bl_description = "Center grid around the 3D Cursor"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    rotation: bpy.props.BoolProperty(name="Rotation", default=False)
+
+    def execute(self, context):
+        dg = context.evaluated_depsgraph_get()
+
+        initial_matrix = clear_grid_transform(context, False)
+
+        matrix = context.scene.cursor.matrix.copy()
+
+        if not self.rotation:
+            translation = matrix.to_translation()
+            matrix = mathutils.Matrix.Translation(translation) @ initial_matrix.to_quaternion().to_matrix().to_4x4()
+
+        set_grid_transform(context, matrix, initial_matrix)
+
+        return {'FINISHED'}
+
+
+
+class SetGridOriginFromCursor(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_set_cursor_project"
+    bl_label = "Project Local Grid from Cursor"
+    bl_description = "Rotate grid until the 3D Cursor lies on a cardinal axis"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        dg = context.evaluated_depsgraph_get()
+
+        initial_matrix = clear_grid_transform(context, False)
+
+        if context.scene.grid_origin is None:
+            up = mathutils.Vector((0, 0, 1))
+        else:
+            up = context.scene.grid_origin_up
+
+        matrix = matrix_from_axes(center, up, axis)
+
+        set_grid_transform(context, matrix, initial_matrix)
+
+        return {'FINISHED'}
+
+
+class SetGridOriginFromActive(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_set_active"
+    bl_label = "Set Local Grid from Active"
+    bl_description = "Center the grid around the active Object, Face, Edge, or Vertex"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    rotation: bpy.props.BoolProperty(name="Rotation", default=True)
+
+    @classmethod
+    def poll(cls, context):
+        if context.active_object is None: return False
+
+        if context.mode == 'OBJECT': return True
+
+        if cls.poll_mesh(context): return True
+        if cls.poll_bone(context): return True
+
+        return False
+
+
+    @staticmethod
+    def poll_mesh(context):
+        if context.mode != 'EDIT_MESH': return False
+
+        data = context.active_object.data
+
+        bm = bmesh.from_edit_mesh(data)
+
+        if bm.select_history.active is None:
+            bm.free()
+            return False
+
+        bm.free()
+
+        return True
+        
+
+    @staticmethod
+    def poll_bone(context):
+        if context.mode != 'EDIT_ARMATURE' and context.mode != 'POSE': return False
+        return context.active_bone is not None
+
+
+    def execute(self, context):
+        dg = context.evaluated_depsgraph_get()
+
+        initial_matrix = mathutils.Matrix()
+        if context.scene.grid_origin is not None:
+            initial_matrix = context.scene.evaluated_get(dg).grid_origin.matrix_world.inverted()
+
+        initial_matrix = clear_grid_transform(context, interpolated = True)
+        initial_rotation = initial_matrix.to_quaternion().to_matrix().to_4x4()
+
+        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
+        active_object_rotation = active_object_matrix.to_quaternion().to_matrix().to_4x4()
+        matrix = None
+
+        if self.poll_mesh(context):
+            data = context.active_object.data
+            bm = bmesh.from_edit_mesh(data)
+
+            active = bm.select_history.active
+
+            if isinstance(active, bmesh.types.BMFace):
+                origin, up, front = bmesh_face_axes(
+                    active,
+                    # Just guess a front vector (from the longest edge?)
+                    None,
+                )
+
+                matrix = active_object_matrix @ matrix_from_axes(origin, up, front)
+
+
+            elif isinstance(active, bmesh.types.BMEdge):
+                origin = (active.verts[0].co + active.verts[1].co) / 2
+                origin = active_object_matrix @ origin
+
+                up = active.verts[1].co - active.verts[0].co
+                up = up.normalized()
+
+                up = active_object_rotation @ up
+
+                front = initial_rotation @ choose_orthogonal_axis(
+                    initial_rotation @ up
+                )
+
+                print(up.dot(front))
+
+                matrix = matrix_from_axes(origin, up, front)
+
+
+            elif isinstance(active, bmesh.types.BMVert):
+                translation = active_object_matrix @ active.co
+                matrix = mathutils.Matrix.Translation(translation) @ initial_rotation
+
+
+        elif self.poll_bone(context):
+            bone_matrix = None
+            bone_length = 0
+
+            if context.active_pose_bone is not None:
+                bone_matrix = context.active_pose_bone.matrix
+                bone_length = context.active_pose_bone.length
+            elif context.active_bone is not None and isinstance(context.active_bone, bpy.types.EditBone):
+                bone_matrix = context.active_bone.matrix
+                bone_length = context.active_bone.length
+            else:
+                # It doesn't make sense to reach here!
+
+                # bone_matrix = context.active_bone.matrix_local
+                # bone_length = context.active_bone.length
+
+                raise ValueError("this should not happen") # If this happens, maybe uncommenting the above lines will help.
+
+            # bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
+
+            # bone_matrix = mathutils.Matrix.Translation((0, 0, 0))
+
+            matrix = active_object_matrix @ bone_matrix
+
+
+        else:
+            matrix = active_object_matrix
+
+        set_grid_transform(context, matrix, initial_matrix, interpolated = True)
+
+        return {'FINISHED'}
 
 class SetGridOriginFromVertices(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_vertices"
@@ -363,23 +574,23 @@ class SetGridOrigin(bpy.types.Operator):
     def get_enum_items(self, context):
         items = []
 
-        items.append(('CURSOR', "Cursor", "Align grid to 3D cursor", 'CURSOR', 0))
-        items.append(('OBJECT', "Object", "Align grid to the active object", 'OBJECT_DATA', 1))
+        items.append(('CURSOR', "(LEGACY) Cursor", "Align grid to 3D cursor", 'CURSOR', 0))
+        items.append(('OBJECT', "(LEGACY) Object", "Align grid to the active object", 'OBJECT_DATA', 1))
 
         if SetGridOrigin.poll_face(context):
             items.extend([
-                ('FACE', "Face", "Align grid to the active face, with the active edge or vertex aligned to the grid; if no edge or vertex is active, the longest edge will be aligned to the grid", 'FACESEL', 3),
+                ('FACE', "(LEGACY) Face", "Align grid to the active face, with the active edge or vertex aligned to the grid; if no edge or vertex is active, the longest edge will be aligned to the grid", 'FACESEL', 3),
             ])
 
         if SetGridOrigin.poll_edge(context):
-            items.append(('EDGE', "Edge", "Translate grid to the active vertex", 'EDGESEL', 4))
+            items.append(('EDGE', "(LEGACY) Edge", "Translate grid to the active vertex", 'EDGESEL', 4))
 
         if SetGridOrigin.poll_vertex(context):
-            items.append(('VERTEX', "Vertex", "Translate grid to the active vertex", 'VERTEXSEL', 5))
-            items.append(('VERTEX_PROJECT', "Vertex Project", "Rotate the grid so that the vertex lies on a cardinal axis", 'VERTEXSEL', 6))
+            items.append(('VERTEX', "(LEGACY) Vertex", "Translate grid to the active vertex", 'VERTEXSEL', 5))
+            items.append(('VERTEX_PROJECT', "(LEGACY) Vertex Project", "Rotate the grid so that the vertex lies on a cardinal axis", 'VERTEXSEL', 6))
 
         if SetGridOrigin.poll_bone(context):
-            items.append(('BONE', "Bone", "Align grid to the active bone", 'BONE_DATA', 7))
+            items.append(('BONE', "(LEGACY) Bone", "Align grid to the active bone", 'BONE_DATA', 7))
 
         return items
 
@@ -711,9 +922,11 @@ def history_post_handler(scene):
 
 def menu_func(self, context):
     self.layout.separator()
-    self.layout.operator(SetGridOrigin.bl_idname)
-    self.layout.operator(SetGridOriginFromVertices.bl_idname)
+    # self.layout.operator(SetGridOrigin.bl_idname)
     self.layout.operator(ClearGridOrigin.bl_idname)
+    self.layout.operator(SetGridOriginFromActive.bl_idname)
+    self.layout.operator(SetGridOriginFromCursor.bl_idname)
+    self.layout.operator(SetGridOriginFromVertices.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
     bl_label = "Local Grid"
@@ -723,18 +936,27 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         pie = layout.menu_pie()
         pie.operator(ClearGridOrigin.bl_idname)
+        pie.operator(SetGridOriginFromActive.bl_idname)
+        pie.operator(SetGridOriginFromCursor.bl_idname)
         pie.operator(SetGridOriginFromVertices.bl_idname)
-        pie.operator_enum(SetGridOrigin.bl_idname, "align_to")
+        # pie.operator_enum(SetGridOrigin.bl_idname, "align_to")
 
 addon_keymaps = []
 
-def register():
-    bpy.utils.register_class(GridSnapAddonPreferences)
-    bpy.utils.register_class(SetGridOrigin)
-    bpy.utils.register_class(SetGridOriginFromVertices)
-    bpy.utils.register_class(ClearGridOrigin)
+classes = [
+    GridSnapAddonPreferences,
+    SetGridOrigin,
+    SetGridOriginFromActive,
+    SetGridOriginFromCursor,
+    SetGridOriginFromVertices,
+    ClearGridOrigin,
 
-    bpy.utils.register_class(VIEW3D_MT_local_grid_pie)
+    VIEW3D_MT_local_grid_pie,
+]
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon:
@@ -753,12 +975,8 @@ def register():
     bpy.app.handlers.redo_post.append(history_post_handler)
 
 def unregister():
-    bpy.utils.unregister_class(GridSnapAddonPreferences)
-    bpy.utils.unregister_class(SetGridOrigin)
-    bpy.utils.unregister_class(SetGridOriginFromVertices)
-    bpy.utils.unregister_class(ClearGridOrigin)
-
-    bpy.utils.unregister_class(VIEW3D_MT_local_grid_pie)
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
 
     wm = bpy.context.window_manager
     kc = wm.keyconfigs.addon
