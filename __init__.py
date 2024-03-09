@@ -84,9 +84,7 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 if region.type != 'WINDOW':
                     continue
 
-                # @TODO: find out why this happens
-                if not hasattr(region.data, "view_rotation"):
-                    print(f"Region has no `view_rotation` property? {region}, {region.data}, {space}, {area}")
+                if not region.data:
                     continue
 
                 order = "XZY"
