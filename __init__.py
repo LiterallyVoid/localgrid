@@ -360,9 +360,9 @@ class SetGridOriginFromCursor(bpy.types.Operator):
 
 
 
-class SetGridOriginFromCursor(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_set_cursor_project"
-    bl_label = "Project Local Grid from Cursor"
+class ProjectGridOriginToCursor(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_project_to_cursor"
+    bl_label = "Project Local Grid to Cursor"
     bl_description = "Rotate grid until the 3D Cursor lies on a cardinal axis"
 
     bl_options = {'REGISTER', 'UNDO'}
@@ -576,327 +576,9 @@ class SetGridOriginFromVertices(bpy.types.Operator):
 
         return {'FINISHED'}
 
-class SetGridOrigin(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_set"
-    bl_label = "Set Grid Origin"
-    bl_description = "Set grid origin from active object, face, vertex, or bone"
-
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def get_enum_items(self, context):
-        items = []
-
-        items.append(('CURSOR', "(LEGACY) Cursor", "Align grid to 3D cursor", 'CURSOR', 0))
-        items.append(('OBJECT', "(LEGACY) Object", "Align grid to the active object", 'OBJECT_DATA', 1))
-
-        if SetGridOrigin.poll_face(context):
-            items.extend([
-                ('FACE', "(LEGACY) Face", "Align grid to the active face, with the active edge or vertex aligned to the grid; if no edge or vertex is active, the longest edge will be aligned to the grid", 'FACESEL', 3),
-            ])
-
-        if SetGridOrigin.poll_edge(context):
-            items.append(('EDGE', "(LEGACY) Edge", "Translate grid to the active vertex", 'EDGESEL', 4))
-
-        if SetGridOrigin.poll_vertex(context):
-            items.append(('VERTEX', "(LEGACY) Vertex", "Translate grid to the active vertex", 'VERTEXSEL', 5))
-            items.append(('VERTEX_PROJECT', "(LEGACY) Vertex Project", "Rotate the grid so that the vertex lies on a cardinal axis", 'VERTEXSEL', 6))
-
-        if SetGridOrigin.poll_bone(context):
-            items.append(('BONE', "(LEGACY) Bone", "Align grid to the active bone", 'BONE_DATA', 7))
-
-        return items
-
-    def get_enum(self):
-        # This isn't great, but oh well.
-        context = bpy.context
-
-        if self.align_to_internal != -1:
-            return self.align_to_internal
-
-        default = 1
-
-        if SetGridOrigin.poll_edge(context):
-            default = 4
-
-        if SetGridOrigin.poll_vertex(context):
-            default = 5
-
-        if SetGridOrigin.poll_face(context):
-            default = 3
-
-        if SetGridOrigin.poll_bone(context):
-            default = 6
-
-
-        self.align_to_internal = default
-        
-
-        return self.align_to_internal
-
-    def set_enum(self, value):
-        print("SET", value)
-        self.align_to_internal = value
-
-    # Internal, because there's no way to hide a sentinel item if I use `layout.prop`. (Well, there is, but it's very ugly -- and I won't speak of it again!)
-    # Initially, I had used `prop_enum` to create an expanded button list, but that style doesn't work so well with so many options. (It couldn't be laid out horizontally, because the text started being truncated, and vertically it just looked ugly.)
-    align_to_internal: bpy.props.IntProperty(default=-1, options={'SKIP_SAVE'})
-    align_to: bpy.props.EnumProperty(
-        name="Align to",
-        items=get_enum_items,
-        options={'SKIP_SAVE'},
-        get=get_enum,
-        set=set_enum,
-        default=-1
-    )
-
-    # Skip save on these, because it's really annoying to have these save across different kinds.
-    # The proper fix is probably to separate this operator into operators for face/vertex/edge/whatever.
-    translation: bpy.props.BoolProperty(name="Translation", default=True, options={'SKIP_SAVE'})
-    rotation: bpy.props.BoolProperty(name="Rotation", default=True, options={'SKIP_SAVE'})
-
-    bone_head_tail: bpy.props.FloatProperty(name="Head/Tail", min=0.0, max=1.0, subtype='FACTOR')
-
-    # The initial grid matrix, *including* the minimized roll portion.
-    initial_grid_matrix: bpy.props.FloatVectorProperty(name="Initial Grid Matrix", subtype='MATRIX', size=(4, 4), options={'SKIP_SAVE'})
-    initial_grid_origin_up: bpy.props.FloatVectorProperty(name="Initial Grid Origin Up", subtype='DIRECTION', size=3, options={'SKIP_SAVE'})
-
-    @staticmethod
-    def poll_object(context):
-        return context.active_object is not None
-
-    @staticmethod
-    def poll_face(context):
-        if context.mode != 'EDIT_MESH': return False
-
-        data = context.active_object.data
-
-        # Experimentally, the editmesh -> bmesh conversion is not the bottleneck. Hopefully this is fine!
-        bm = bmesh.from_edit_mesh(data)
-        active = bm.faces.active is not None and bm.faces.active.select
-        bm.free()
-
-        return active
-
-
-    @staticmethod
-    def poll_edge(context):
-        if context.mode != 'EDIT_MESH': return False
-
-        data = context.active_object.data
-
-        bm = bmesh.from_edit_mesh(data)
-        active = False
-
-        if isinstance(bm.select_history.active, bmesh.types.BMEdge):
-            active = True
-
-        if len(bm.select_history) == 2 and isinstance(bm.select_history[0], bmesh.types.BMVert) and isinstance(bm.select_history[1], bmesh.types.BMVert):
-            active = True
-
-        bm.free()
-
-        return active
-
-    @staticmethod
-    def poll_vertex(context):
-        if context.mode != 'EDIT_MESH': return False
-
-        data = context.active_object.data
-
-        bm = bmesh.from_edit_mesh(data)
-        active = isinstance(bm.select_history.active, bmesh.types.BMVert)
-        bm.free()
-
-        return active
-
-
-    @staticmethod
-    def poll_bone(context):
-        # Assumption: context.active_pose_bone is `True` iff there's an active bone and the context is in pose mode.
-        return (context.mode == 'EDIT_ARMATURE' or context.mode == 'POSE') and context.active_bone is not None
-
-    def draw(self, context):
-        layout = self.layout.column()
-        layout.use_property_decorate = True
-        layout.use_property_split = True
-
-        align_to = layout.column(align = True)
-        layout.prop(self, "align_to")
-
-        rotation_supported = self.align_to != "VERTEX"
-
-        layout.prop(self, "translation")
-
-        rotation = layout.column()
-        rotation.prop(self, "rotation")
-        rotation.enabled = rotation_supported
-
-        if self.poll_face(context):
-            face = layout.column()
-
-            face.enabled = (self.align_to == 'FACE_VERTEX' or self.align_to == 'FACE_EDGE') and self.rotation
-
-        if self.poll_bone(context):
-            bone = layout.column()
-            bone.prop(self, "bone_head_tail")
-            bone.enabled = self.align_to == 'BONE'
-
-    def execute(self, context):
-        if self.align_to == 'DEFAULT':
-            match context.mode:
-                case 'OBJECT':
-                    self.align_to = 'OBJECT'
-                case 'EDIT_MESH':
-                    if self.poll_vertex(context):
-                        self.align_to = 'VERTEX'
-                    elif self.poll_edge(context):
-                        self.align_to = 'EDGE'
-                    else:
-                        self.align_to = 'FACE_EDGE'
-                case 'EDIT_ARMATURE' | 'POSE':
-                    self.align_to = 'BONE'
-
-        dg = context.evaluated_depsgraph_get()
-
-        if not self.options.is_repeat:
-            print("Initial rotation calculating")
-            self.initial_grid_matrix = mathutils.Matrix()
-            if context.scene.grid_origin is None:
-                self.initial_grid_matrix = mathutils.Matrix()
-                self.initial_grid_origin_up = mathutils.Vector((0, 0, 1))
-            else:
-                self.initial_grid_matrix = context.scene.evaluated_get(dg).grid_origin.matrix_world.inverted()
-                self.initial_grid_origin_up = context.scene.grid_origin_up
-
-        interpolated = not self.options.is_repeat
-
-        clear_grid_transform(context, interpolated)
-
-        dg.update()
-
-        # The active object's matrix is required for every snap mode.
-        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
-
-        matrix = None
-
-        rotation = self.rotation
-
-        match self.align_to:
-            case 'DEFAULT': assert False
-            case 'OBJECT':
-                matrix = active_object_matrix
-            case 'FACE':
-                data = context.active_object.data
-                bm = bmesh.from_edit_mesh(data)
-                face = bm.faces.active
-
-                axis = None
-
-                front_vector = None
-
-                active_el = bm.select_history.active
-                face_center = face.calc_center_median()
-
-                if isinstance(active_el, bmesh.types.BMEdge):
-                    front_vector = active_el.verts[1].co - active_el.verts[0].co
-                elif isinstance(active_el, bmesh.types.BMVert):
-                    front_vector = active_el.co - face_center
-
-                if face is None:
-                    matrix = active_object_matrix
-                else:
-                    origin, up, front = bmesh_face_axes(
-                        face,
-                        front_vector,
-                    )
-                    matrix = active_object_matrix @ matrix_from_axes(origin, up, front)
-
-                bm.free()
-            case 'EDGE':
-                # An edge is WEIRD because there are two axes!
-                data = context.active_object.data
-
-                bm = bmesh.from_edit_mesh(data)
-
-                vertices = []
-                if isinstance(edge := bm.select_history.active, bmesh.types.BMEdge):
-                    vertices = [*edge.verts]
-                else:
-                    vertices = [*bm.select_history]
-
-                center = (vertices[0].co + vertices[1].co) / 2
-                forwards = vertices[1].co - vertices[0].co
-
-                center = active_object_matrix @ center
-                forwards = active_object_matrix.to_3x3() @ forwards
-
-                initial_rotation = self.initial_grid_matrix.to_quaternion()
-
-                up = self.initial_grid_origin_up
-                matrix = matrix_from_axes(center, up, forwards)
-            case 'VERTEX':
-                data = context.active_object.data
-                bm = bmesh.from_edit_mesh(data)
-                vertex = bm.select_history.active
-
-                rotation = False
-
-                if vertex is None:
-                    matrix = active_object_matrix
-                else:
-                    matrix = active_object_matrix @ mathutils.Matrix.Translation(vertex.co)
-            case 'VERTEX_PROJECT':
-                data = context.active_object.data
-                bm = bmesh.from_edit_mesh(data)
-                vertex = bm.select_history.active
-
-                center = active_object_matrix @ vertex.co
-                axis = center - self.initial_grid_matrix.to_translation()
-
-                up = self.initial_grid_origin_up
-
-                print("vp", center, axis, up)
-
-                matrix = matrix_from_axes(center, up, axis)
-            case 'BONE':
-                bone_matrix = None
-                bone_length = 0
-
-                if context.active_pose_bone is not None:
-                    bone_matrix = context.active_pose_bone.matrix
-                    bone_length = context.active_pose_bone.length
-                elif context.active_bone is not None and isinstance(context.active_bone, bpy.types.EditBone):
-                    bone_matrix = context.active_bone.matrix
-                    bone_length = context.active_bone.length
-                else:
-                    bone_matrix = context.active_bone.matrix_local
-                    bone_length = context.active_bone.length
-
-                bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
-
-                # bone_matrix = mathutils.Matrix.Translation((0, 0, 0))
-
-                matrix = active_object_matrix @ bone_matrix
-            case 'CURSOR':
-                matrix = context.scene.cursor.matrix.copy()
-
-        assert matrix is not None
-
-        if not self.translation:
-            matrix = mathutils.Matrix.Translation(self.initial_grid_matrix.to_translation()) @ matrix.to_quaternion().to_matrix().to_4x4()
-
-        if not rotation:
-            translation = matrix.to_translation()
-            matrix = mathutils.Matrix.Translation(translation) @ self.initial_grid_matrix.to_quaternion().to_matrix().to_4x4()
-
-        print(self.options.is_repeat)
-        set_grid_transform(context, matrix, self.initial_grid_matrix, interpolated)
-
-        return {'FINISHED'}
-
 class ClearGridOrigin(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_clear"
-    bl_label = "Reset Grid Origin"
+    bl_idname = "view3d.reset_local_grid"
+    bl_label = "Reset Local Grid"
     bl_description = "Reset grid back to the scene's origin"
 
     @classmethod
@@ -938,6 +620,7 @@ def menu_func(self, context):
     self.layout.operator(ClearGridOrigin.bl_idname)
     self.layout.operator(SetGridOriginFromActive.bl_idname)
     self.layout.operator(SetGridOriginFromCursor.bl_idname)
+    self.layout.operator(ProjectGridOriginToCursor.bl_idname)
     self.layout.operator(SetGridOriginFromVertices.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
@@ -950,8 +633,8 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         pie.operator(ClearGridOrigin.bl_idname)
         pie.operator(SetGridOriginFromActive.bl_idname)
         pie.operator(SetGridOriginFromCursor.bl_idname)
+        pie.operator(ProjectGridOriginToCursor.bl_idname)
         pie.operator(SetGridOriginFromVertices.bl_idname)
-        # pie.operator_enum(SetGridOrigin.bl_idname, "align_to")
 
 addon_keymaps = []
 
@@ -960,6 +643,7 @@ classes = [
     SetGridOrigin,
     SetGridOriginFromActive,
     SetGridOriginFromCursor,
+    ProjectGridOriginToCursor,
     SetGridOriginFromVertices,
     ClearGridOrigin,
 
