@@ -386,8 +386,7 @@ class ProjectGridOriginToCursor(bpy.types.Operator):
         center = initial_matrix @ mathutils.Vector((0, 0, 0))
         front = cursor_matrix.to_translation() - center
 
-
-        matrix = matrix_from_axes(center, up, front)
+        matrix = matrix_from_axes(center, front, up)
 
 
         set_grid_transform(context, matrix, initial_matrix, move_cursor_to_origin = False)
