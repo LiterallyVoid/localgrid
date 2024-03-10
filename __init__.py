@@ -580,11 +580,18 @@ class ClearGridOrigin(bpy.types.Operator):
     bl_label = "Reset Local Grid"
     bl_description = "Reset grid back to the scene's origin"
 
-    @classmethod
-    def poll(cls, context):
-        return context.scene.grid_origin is not None
+    # It feels a lot better if this operator's always available.
+    # It's idempotent anyway.
+
+    # @classmethod
+    # def poll(cls, context):
+    #     return context.scene.grid_origin is not None
 
     def execute(self, context):
+        if context.scene.grid_origin is None:
+            # Don't add an undo entry if nothing happens.
+            return {'CANCELLED'}
+
         clear_grid_transform(context)
 
         return {'FINISHED'}
