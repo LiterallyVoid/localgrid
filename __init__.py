@@ -276,23 +276,12 @@ def choose_orthogonal_axis(orthogonal_to):
     return min(axes, key = lambda axis: abs(axis.dot(orthogonal_to)))
 
 
-def matrix_from_axes(
+def matrix_from_axes_prefer_up(
     origin: mathutils.Vector,
     up_vector: mathutils.Vector,
-    front_vector: Optional[mathutils.Vector],
+    front_vector: mathutils.Vector,
 ) -> mathutils.Matrix:
     up_vector = up_vector.normalized()
-
-    if front_vector is None:
-        # If there's no front vector given, just choose a random axis?
-        axes = [
-            mathutils.Vector((1, 0, 0)),
-            mathutils.Vector((0, 1, 0)),
-            mathutils.Vector((0, 0, 1)),
-        ]
-
-        # Choose the cardinal axis that's most cardinal from `up`.
-        front_vector = min(axes, key = lambda axis: 1 - abs(axis.dot(up_vector)))
 
     back = -front_vector
 
@@ -303,6 +292,27 @@ def matrix_from_axes(
         mathutils.Vector((*right, 0)),
         mathutils.Vector((*back, 0)),
         mathutils.Vector((*up_vector, 0)),
+        origin.to_4d(),
+    )).transposed()
+
+    return mat
+
+def matrix_from_axes_prefer_front(
+    origin: mathutils.Vector,
+    up_vector: mathutils.Vector,
+    front_vector: mathutils.Vector,
+) -> mathutils.Matrix:
+    front_vector = front_vector.normalized()
+
+    right = up_vector.cross(front_vector).normalized()
+    up = front_vector.cross(right).normalized()
+
+    back = -front_vector
+
+    mat = mathutils.Matrix((
+        mathutils.Vector((*right, 0)),
+        mathutils.Vector((*back, 0)),
+        mathutils.Vector((*up, 0)),
         origin.to_4d(),
     )).transposed()
 
@@ -386,7 +396,7 @@ class ProjectGridOriginToCursor(bpy.types.Operator):
         center = initial_matrix @ mathutils.Vector((0, 0, 0))
         front = cursor_matrix.to_translation() - center
 
-        matrix = matrix_from_axes(center, front, up)
+        matrix = matrix_from_axes_prefer_front(center, up, front)
 
 
         set_grid_transform(context, matrix, initial_matrix, move_cursor_to_origin = False)
@@ -466,7 +476,7 @@ class SetGridOriginFromActive(bpy.types.Operator):
                     None,
                 )
 
-                matrix = active_object_matrix @ matrix_from_axes(origin, up, front)
+                matrix = active_object_matrix @ matrix_from_axes_prefer_up(origin, up, front)
 
 
             elif isinstance(active, bmesh.types.BMEdge):
@@ -569,11 +579,80 @@ class SetGridOriginFromVertices(bpy.types.Operator):
 
         active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
 
-        matrix = active_object_matrix @ matrix_from_axes(center, up, front)
+        matrix = active_object_matrix @ matrix_from_axes_prefer_up(center, up, front)
 
         set_grid_transform(context, matrix, initial_matrix, interpolated = True)
 
         return {'FINISHED'}
+
+
+class AlignToEdge(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_align_to_edge"
+    bl_label = "Align Grid Origin To Edge"
+    bl_description = "Rotate grid until active edge is aligned to an axis"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        if context.mode != 'EDIT_MESH': return False
+        if context.active_object is None: return False
+
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        # If there are two selected vertices, choose the line between them
+        if len(bm.select_history) == 2 and \
+            all([isinstance(elem, bmesh.types.BMVert) for elem in bm.select_history]):
+            return True
+
+        # If the active element is an edge, choose it
+        if isinstance(bm.select_history.active, bmesh.types.BMEdge):
+            return True
+
+        return False
+
+    def execute(self, context):
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        vector = None
+
+        # If there are two selected vertices, choose the line between them
+        if len(bm.select_history) == 2 and \
+            all([isinstance(elem, bmesh.types.BMVert) for elem in bm.select_history]):
+            vector = bm.select_history[1].co - bm.select_history[0].co
+
+
+        # If the active element is an edge, choose it
+        elif isinstance(bm.select_history.active, bmesh.types.BMEdge):
+            edge = bm.select_history.active
+            vector = edge.verts[1].co - edge.verts[0].co
+
+        else:
+            raise ValueError("AlignToEdge: poll should have failed")
+
+        dg = context.evaluated_depsgraph_get()
+
+        if context.scene.grid_origin is None:
+            up = mathutils.Vector((0, 0, 1))
+        else:
+            up = context.scene.evaluated_get(dg).grid_origin_up
+
+        initial_matrix = clear_grid_transform(context, interpolated = True)
+
+        center = initial_matrix @ mathutils.Vector((0, 0, 0))
+
+        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
+
+        vector = active_object_matrix.to_3x3() @ vector
+
+        matrix = matrix_from_axes_prefer_front(center, up, vector)
+
+        set_grid_transform(context, matrix, initial_matrix, interpolated = True)
+
+        return {'FINISHED'}
+
 
 class ClearGridOrigin(bpy.types.Operator):
     bl_idname = "view3d.reset_local_grid"
@@ -622,12 +701,12 @@ def history_post_handler(scene):
 
 def menu_func(self, context):
     self.layout.separator()
-    # self.layout.operator(SetGridOrigin.bl_idname)
     self.layout.operator(ClearGridOrigin.bl_idname)
     self.layout.operator(SetGridOriginFromActive.bl_idname)
     self.layout.operator(SetGridOriginFromCursor.bl_idname)
     self.layout.operator(ProjectGridOriginToCursor.bl_idname)
     self.layout.operator(SetGridOriginFromVertices.bl_idname)
+    self.layout.operator(AlignToEdge.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
     bl_label = "Local Grid"
@@ -636,22 +715,35 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         layout = self.layout
 
         pie = layout.menu_pie()
-        pie.operator(ClearGridOrigin.bl_idname)
-        pie.operator(SetGridOriginFromActive.bl_idname)
-        pie.operator(SetGridOriginFromCursor.bl_idname)
-        pie.operator(ProjectGridOriginToCursor.bl_idname)
-        pie.operator(SetGridOriginFromVertices.bl_idname)
+        pie.operator(ClearGridOrigin.bl_idname, text="Reset")
+
+        pie.operator(SetGridOriginFromActive.bl_idname, text="Active")
+
+        pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
+
+        pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
+
+        pie.separator()
+
+        pie.operator(AlignToEdge.bl_idname, text="Align Edge")
+
+        pie.separator()
+
+        pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
 
 addon_keymaps = []
 
 classes = [
     GridSnapAddonPreferences,
-    SetGridOrigin,
+
+    ClearGridOrigin,
+
     SetGridOriginFromActive,
     SetGridOriginFromCursor,
-    ProjectGridOriginToCursor,
     SetGridOriginFromVertices,
-    ClearGridOrigin,
+
+    ProjectGridOriginToCursor,
+    AlignToEdge,
 
     VIEW3D_MT_local_grid_pie,
 ]
@@ -685,6 +777,7 @@ def unregister():
     if kc:
         for km, kmi in addon_keymaps:
             km.keymap_items.remove(kmi)
+
     addon_keymaps.clear()
 
     bpy.types.VIEW3D_MT_view.remove(menu_func)
