@@ -196,7 +196,7 @@ def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix
     return scored[-1][0]
 
 # `previous_matrix` will be used to minimize roll.
-def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Optional[mathutils.Matrix] = None, interpolated = True):
+def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Optional[mathutils.Matrix] = None, interpolated = True, *, move_cursor_to_origin = True):
     preferences = context.preferences
     addon_prefs = preferences.addons[__name__].preferences
 
@@ -230,7 +230,7 @@ def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Op
     apply_matrix_to_misc_scene(context, transform)
     apply_matrix_to_misc_view(context, transform, interpolated)
 
-    if addon_prefs.move_cursor_to_origin:
+    if move_cursor_to_origin and addon_prefs.move_cursor_to_origin:
         context.scene.cursor.matrix = mathutils.Matrix()
 
 bpy.types.Scene.grid_origin = bpy.props.PointerProperty(type=bpy.types.Object, name="Grid Origin", description="The Empty currently set as the Grid Origin. Its transform is the inverse transform of the current grid transform", options=set())
@@ -370,16 +370,28 @@ class SetGridOriginFromCursor(bpy.types.Operator):
     def execute(self, context):
         dg = context.evaluated_depsgraph_get()
 
-        initial_matrix = clear_grid_transform(context, False)
 
         if context.scene.grid_origin is None:
             up = mathutils.Vector((0, 0, 1))
         else:
-            up = context.scene.grid_origin_up
+            up = context.scene.evaluated_get(dg).grid_origin_up
 
-        matrix = matrix_from_axes(center, up, axis)
 
-        set_grid_transform(context, matrix, initial_matrix)
+        initial_matrix = clear_grid_transform(context, False)
+
+        dg = context.evaluated_depsgraph_get()
+
+        cursor_matrix = context.scene.evaluated_get(dg).cursor.matrix
+
+        center = initial_matrix @ mathutils.Vector((0, 0, 0))
+        front = cursor_matrix.to_translation() - center
+
+
+        matrix = matrix_from_axes(center, up, front)
+
+
+        set_grid_transform(context, matrix, initial_matrix, move_cursor_to_origin = False)
+
 
         return {'FINISHED'}
 
