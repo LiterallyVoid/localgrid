@@ -700,7 +700,7 @@ def history_post_handler(scene):
     if matrix is None and history_pre_matrix is None:
         return
 
-    combined =
+    combined = \
         (history_pre_matrix or mathutils.Matrix()) \
       @ (matrix or mathutils.Matrix()).inverted()
 
