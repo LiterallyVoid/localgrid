@@ -15,7 +15,7 @@ import bpy, mathutils, bmesh, math
 from typing import Optional
 from bpy.app.handlers import persistent
 
-grid_origin_empty_name = "Grid Snap: Grid Origin Empty"
+grid_origin_empty_name = "Local Grid: Grid Origin Inverse"
 
 def create_transformed_empty(context, matrix: mathutils.Matrix):
     try:
@@ -94,8 +94,8 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 region.data.view_location = rotation_matrix @ region.data.view_location
                 region.data.view_location += translation
 
-                if region.data.is_orthographic_side_view:
-                    continue
+                # if region.data.is_orthographic_side_view:
+                    # continue
 
                 old = region.data.view_rotation
                 naive = rotation @ region.data.view_rotation
@@ -494,7 +494,7 @@ class SetGridOriginFromActive(bpy.types.Operator):
 
                 print(up.dot(front))
 
-                matrix = matrix_from_axes(origin, up, front)
+                matrix = matrix_from_axes_prefer_up(origin, up, front)
 
 
             elif isinstance(active, bmesh.types.BMVert):
@@ -684,7 +684,7 @@ def history_pre_handler(scene):
     if scene.grid_origin:
         history_pre_matrix = scene.grid_origin.matrix_world.copy()
     else:
-        history_pre_matrix = mathutils.Matrix()
+        history_pre_matrix = None
 
 @persistent
 def history_post_handler(scene):
@@ -695,9 +695,16 @@ def history_post_handler(scene):
     if scene.grid_origin:
         matrix = scene.grid_origin.matrix_world
     else:
-        matrix = mathutils.Matrix()
+        matrix = None
 
-    apply_matrix_to_misc_view(bpy.context, history_pre_matrix @ matrix.inverted(), interpolated = False)
+    if matrix is None and history_pre_matrix is None:
+        return
+
+    combined =
+        (history_pre_matrix or mathutils.Matrix()) \
+      @ (matrix or mathutils.Matrix()).inverted()
+
+    apply_matrix_to_misc_view(bpy.context, combined, interpolated = False)
 
 def menu_func(self, context):
     self.layout.separator()
