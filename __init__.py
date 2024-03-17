@@ -87,6 +87,9 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 if not region.data:
                     continue
 
+                if region.data.view_perspective == 'CAMERA':
+                    continue
+
                 order = "XZY"
 
                 view_roll = region.data.view_rotation.to_euler(order).y
@@ -94,8 +97,8 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
                 region.data.view_location = rotation_matrix @ region.data.view_location
                 region.data.view_location += translation
 
-                # if region.data.is_orthographic_side_view:
-                    # continue
+                if region.data.is_orthographic_side_view:
+                    continue
 
                 old = region.data.view_rotation
                 naive = rotation @ region.data.view_rotation
