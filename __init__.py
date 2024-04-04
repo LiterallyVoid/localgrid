@@ -1,10 +1,27 @@
+# Local Grid
+# Copyright (C) 2024 LiterallyVoid
+# literallyvoid@gmail.com
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 bl_info = {
     "name": "Local Grid",
     "author": "LiterallyVoid",
     "version": (1, 0),
-    "blender": (4, 0, 0),
+    "blender": (4, 1, 0),
     "location": "View3D > View",
-    "description": "",
+    "description": "Local Grid",
     "warning": "",
     "doc_url": "",
     "tracker_url": "",
@@ -28,7 +45,7 @@ def create_transformed_empty(context, matrix: mathutils.Matrix):
     empty.matrix_world = matrix.inverted()
 
     if empty.parent:
-        # This maybe happened in testing. I hope that it was either user error or because of a transient state being saved because of an addon crash, but if it ever happens then it will be very bad. (The exact issue was that this empty was being parented to itself, which indicates that a lot of things had gone very wrong in Blender's data model.)
+        # This maybe happened in testing. I'm almost positive that it was because of me changing the addon, but if this ever happens then it will be very bad.
         print("This should never happen!")
         empty.parent = None
 
@@ -183,7 +200,7 @@ def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix
 
     scored = []
 
-    # @TODO: max(..., key = ...)
+    # @TODO: max(..., key = ...)?
     for i, mod in enumerate(cardinal_axes):
         up = rotation @ mod @ mathutils.Vector((0, 0, 1))
 
@@ -244,20 +261,20 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
     reset_roll: bpy.props.BoolProperty(
-        name="Reset Roll",
+        name="Reset Camera Roll",
         description="Roll the camera so that it points up whenever the grid is changed. This makes navigation easier if your orbit method is Turntable; otherwise it can be disorienting",
         default=True
     )
 
     minimize_roll: bpy.props.BoolProperty(
         name="Minimize Roll",
-        description="Instead of always aligning the +Z axis to the object or face, align whichever axis requires the least roll",
+        description="Instead of always aligning the +Z axis to the object or face, choose an arbitrary axis to face up that minimizes camera roll",
         default=True
     )
 
     move_cursor_to_origin: bpy.props.BoolProperty(
-        name="Move Cursor to Origin",
-        description="Move the cursor to the origin whenever the grid origin is set",
+        name="Snap Cursor",
+        description="Snap the cursor to the grid origin whenever the grid is changed",
         default=True
     )
 
@@ -376,7 +393,7 @@ class SetGridOriginFromCursor(bpy.types.Operator):
 class ProjectGridOriginToCursor(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_project_to_cursor"
     bl_label = "Project Local Grid to Cursor"
-    bl_description = "Rotate grid until the 3D Cursor lies on a cardinal axis"
+    bl_description = "Rotate grid around its current origin so that the 3D Cursor lies on a cardinal axis"
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -411,7 +428,7 @@ class ProjectGridOriginToCursor(bpy.types.Operator):
 class SetGridOriginFromActive(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_active"
     bl_label = "Set Local Grid from Active"
-    bl_description = "Center the grid around the active Object, Face, Edge, or Vertex"
+    bl_description = "Center the grid around the active Object, Face, Edge, Vertex, or Bone"
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -592,7 +609,7 @@ class SetGridOriginFromVertices(bpy.types.Operator):
 class AlignToEdge(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_align_to_edge"
     bl_label = "Align Grid Origin To Edge"
-    bl_description = "Rotate grid until active edge is aligned to an axis"
+    bl_description = "Rotate grid around its current origin so that active edge is aligned to an axis"
 
     bl_options = {'REGISTER', 'UNDO'}
 
