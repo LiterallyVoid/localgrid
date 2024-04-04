@@ -254,8 +254,16 @@ def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Op
         context.scene.cursor.matrix = mathutils.Matrix()
 
 bpy.types.Scene.grid_origin = bpy.props.PointerProperty(type=bpy.types.Object, name="Grid Origin", description="The Empty currently set as the Grid Origin. Its transform is the inverse transform of the current grid transform", options=set())
-bpy.types.Scene.grid_origin_up = bpy.props.FloatVectorProperty(name="Grid +Z Axis, in world space", description="May differ from the current grid transform if Minimize Roll is set", subtype='DIRECTION')
+bpy.types.Scene.grid_origin_up = bpy.props.FloatVectorProperty(name="Grid +Z Axis, in world space", description="May differ from the current grid's Z axis if Minimize Roll is set. Used where the up axis is an important distinction, as in 'Project Cursor' and 'Align Edge'", subtype='DIRECTION')
 bpy.types.Scene.grid_origin_side = bpy.props.FloatVectorProperty(name="Some vector perpendicular to `grid_origin_up`, in world space", description="May differ from the current grid transform if Minimize Roll is set", subtype='DIRECTION')
+
+# Return the global `up` vector.
+# May differ from the current grid transform's Z axis if a different Z axis was chosen to minimize roll.
+def get_grid_up(scene):
+    if scene.grid_origin is not None:
+        return scene.grid_origin_up
+
+    return mathutils.Vector((0, 0, 1))
 
 class GridSnapAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
@@ -284,6 +292,7 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "minimize_roll")
         layout.prop(self, "move_cursor_to_origin")
 
+# Choose a cardinal direction that's maximally perpendicular to `orthogonal_to`.
 def choose_orthogonal_axis(orthogonal_to):
     orthogonal_to = orthogonal_to.normalized()
 
@@ -296,6 +305,7 @@ def choose_orthogonal_axis(orthogonal_to):
     return min(axes, key = lambda axis: abs(axis.dot(orthogonal_to)))
 
 
+# Create a matrix from an origin and two axes, but where `up_vector` and `front_vector` are not perpendicular, create a matrix where `up_vector` is aligned to an axis.
 def matrix_from_axes_prefer_up(
     origin: mathutils.Vector,
     up_vector: mathutils.Vector,
@@ -317,6 +327,7 @@ def matrix_from_axes_prefer_up(
 
     return mat
 
+# Create a matrix from an origin and two vectors, but where `up_vector` and `front_vector` are not perpendicular, create a matrix where `front_vector` is aligned to an axis.
 def matrix_from_axes_prefer_front(
     origin: mathutils.Vector,
     up_vector: mathutils.Vector,
@@ -339,6 +350,7 @@ def matrix_from_axes_prefer_front(
     return mat
 
 # If no `front_vector` is given, choose the longest edge.
+# This is an arbitrary deterministic choice.
 def bmesh_face_axes(
     face: bmesh.types.BMFace,
     front_vector: Optional[mathutils.Vector],
@@ -425,6 +437,52 @@ class ProjectGridOriginToCursor(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class ProjectGridOriginToVertex(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_project_to_vertex"
+    bl_label = "Project Local Grid to Vertex"
+    bl_description = "Rotate grid around its current origin so that the active vertex lies on a cardinal axis"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        if context.mode != 'EDIT_MESH': return False
+        if context.active_object is None: return False
+
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        if isinstance(bm.select_history.active, bmesh.types.BMVert):
+            return True
+
+        return False
+
+    def execute(self, context):
+        data = context.active_object.data
+        bm = bmesh.from_edit_mesh(data)
+
+        vertex_local = bm.select_history.active.co
+
+        up = get_grid_up(context.scene)
+        initial_matrix = clear_grid_transform(context, False)
+
+        dg = context.evaluated_depsgraph_get()
+
+        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
+        vertex = active_object_matrix @ vertex_local
+
+        center = initial_matrix @ mathutils.Vector((0, 0, 0))
+        front = vertex - center
+
+        matrix = matrix_from_axes_prefer_front(center, up, front)
+
+
+        set_grid_transform(context, matrix, initial_matrix, move_cursor_to_origin = False)
+
+
+        return {'FINISHED'}
+
+
 class SetGridOriginFromActive(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_active"
     bl_label = "Set Local Grid from Active"
@@ -470,14 +528,10 @@ class SetGridOriginFromActive(bpy.types.Operator):
 
 
     def execute(self, context):
-        dg = context.evaluated_depsgraph_get()
-
-        initial_matrix = mathutils.Matrix()
-        if context.scene.grid_origin is not None:
-            initial_matrix = context.scene.evaluated_get(dg).grid_origin.matrix_world.inverted()
-
         initial_matrix = clear_grid_transform(context, interpolated = True)
         initial_rotation = initial_matrix.to_quaternion().to_matrix().to_4x4()
+
+        dg = context.evaluated_depsgraph_get()
 
         active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
         active_object_rotation = active_object_matrix.to_quaternion().to_matrix().to_4x4()
@@ -535,14 +589,13 @@ class SetGridOriginFromActive(bpy.types.Operator):
             else:
                 # It doesn't make sense to reach here!
 
-                # bone_matrix = context.active_bone.matrix_local
-                # bone_length = context.active_bone.length
+                #bone_matrix = context.active_bone.matrix_local
+                #bone_length = context.active_bone.length
 
-                raise ValueError("this should not happen") # If this happens, maybe uncommenting the above lines will help.
+                raise ValueError("this should not happen") # If this happens, maybe removing this `raise` and uncommenting the above lines will help?
 
-            # bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
-
-            # bone_matrix = mathutils.Matrix.Translation((0, 0, 0))
+            # There used to be a head/tail slider, but I didn't want to add one-off parameters to a multipurpose operator.
+            #bone_matrix = bone_matrix @ mathutils.Matrix.Translation((0, bone_length * self.bone_head_tail, 0))
 
             matrix = active_object_matrix @ bone_matrix
 
@@ -557,7 +610,7 @@ class SetGridOriginFromActive(bpy.types.Operator):
 class SetGridOriginFromVertices(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_vertices"
     bl_label = "Set Grid Origin From Vertices"
-    bl_description = "Set grid origin from three selected vertices"
+    bl_description = "Set grid origin from three selected vertices, placing the origin at the third vertex and any cardinal axis on the line between the second and third"
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -587,15 +640,11 @@ class SetGridOriginFromVertices(bpy.types.Operator):
         up = adjacent.cross(front)
 
         if up.magnitude < 1e-12:
-            raise ValueError("colinear")
+            raise ValueError("selected vertices are colinear")
+
+        initial_matrix = clear_grid_transform(context, interpolated = True)
 
         dg = context.evaluated_depsgraph_get()
-
-        initial_matrix = mathutils.Matrix()
-        if context.scene.grid_origin is not None:
-            initial_matrix = context.scene.evaluated_get(dg).grid_origin.matrix_world.inverted()
-
-        clear_grid_transform(context, interpolated = True)
 
         active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
 
@@ -608,7 +657,7 @@ class SetGridOriginFromVertices(bpy.types.Operator):
 
 class AlignToEdge(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_align_to_edge"
-    bl_label = "Align Grid Origin To Edge"
+    bl_label = "Align Grid Origin to Edge"
     bl_description = "Rotate grid around its current origin so that active edge is aligned to an axis"
 
     bl_options = {'REGISTER', 'UNDO'}
@@ -652,14 +701,10 @@ class AlignToEdge(bpy.types.Operator):
         else:
             raise ValueError("AlignToEdge: poll should have failed")
 
-        dg = context.evaluated_depsgraph_get()
-
-        if context.scene.grid_origin is None:
-            up = mathutils.Vector((0, 0, 1))
-        else:
-            up = context.scene.evaluated_get(dg).grid_origin_up
-
+        up = get_grid_up(context.scene)
         initial_matrix = clear_grid_transform(context, interpolated = True)
+
+        dg = context.evaluated_depsgraph_get()
 
         center = initial_matrix @ mathutils.Vector((0, 0, 0))
 
@@ -727,13 +772,20 @@ def history_post_handler(scene):
     apply_matrix_to_misc_view(bpy.context, combined, interpolated = False)
 
 def menu_func(self, context):
-    self.layout.separator()
-    self.layout.operator(ClearGridOrigin.bl_idname)
-    self.layout.operator(SetGridOriginFromActive.bl_idname)
-    self.layout.operator(SetGridOriginFromCursor.bl_idname)
-    self.layout.operator(ProjectGridOriginToCursor.bl_idname)
-    self.layout.operator(SetGridOriginFromVertices.bl_idname)
-    self.layout.operator(AlignToEdge.bl_idname)
+    self.layout.menu("VIEW3D_MT_local_grid", text="Local Grid")
+
+class VIEW3D_MT_local_grid(bpy.types.Menu):
+    bl_label = "Local Grid"
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.operator(ClearGridOrigin.bl_idname, text="Reset")
+        layout.operator(SetGridOriginFromActive.bl_idname, text="Active")
+        layout.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
+        layout.operator(ProjectGridOriginToVertex.bl_idname, text="Project Vertex")
+        layout.operator(AlignToEdge.bl_idname, text="Align Edge")
+        layout.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
+        layout.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
     bl_label = "Local Grid"
@@ -742,20 +794,29 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         layout = self.layout
 
         pie = layout.menu_pie()
+
+        # West
         pie.operator(ClearGridOrigin.bl_idname, text="Reset")
 
+        # East
         pie.operator(SetGridOriginFromActive.bl_idname, text="Active")
 
+        # South
         pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
 
+        # North
+        pie.operator(ProjectGridOriginToVertex.bl_idname, text="Project Vertex")
+
+        # Northwest
         pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
 
-        pie.separator()
-
+        # Northeast
         pie.operator(AlignToEdge.bl_idname, text="Align Edge")
 
+        # Southwest
         pie.separator()
 
+        # Southeast
         pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
 
 addon_keymaps = []
@@ -770,8 +831,10 @@ classes = [
     SetGridOriginFromVertices,
 
     ProjectGridOriginToCursor,
+    ProjectGridOriginToVertex,
     AlignToEdge,
 
+    VIEW3D_MT_local_grid,
     VIEW3D_MT_local_grid_pie,
 ]
 
