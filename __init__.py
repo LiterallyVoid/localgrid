@@ -439,24 +439,27 @@ class SetGridOriginFromCursor(bpy.types.Operator):
 class TranslateToSelected(bpy.types.Operator):
     bl_idname = "view3d.grid_translate_to_selected"
     bl_label = "Translate Grid to Selected"
-    bl_description = "Translate grid so that its origin is in the middle of selected item(s)"
+    bl_description = "Center grid to the middle of selected item(s), ignoring rotation"
 
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        return bpy.ops.view3d.snap_cursor_to_selected.poll(context)
+        return bpy.ops.view3d.snap_cursor_to_selected.poll()
 
     def execute(self, context):
         dg = context.evaluated_depsgraph_get()
 
         initial_matrix = clear_grid_transform(context, False)
 
+        # Just use `view3d.snap_cursor_to_selected` and revert the cursor later.
         cursor_matrix = context.scene.cursor.matrix
 
         bpy.ops.view3d.snap_cursor_to_selected()
 
         matrix = context.scene.cursor.matrix.copy()
+
+        # Revert cursor matrix.
         context.scene.cursor.matrix = cursor_matrix
 
         translation = matrix.to_translation()
@@ -502,42 +505,37 @@ class ProjectGridOriginToCursor(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class ProjectGridOriginToVertex(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_project_to_vertex"
+class ProjectSelected(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_project_selected"
     bl_label = "Project Local Grid to Vertex"
-    bl_description = "Rotate grid around its current origin so that the active vertex lies on a cardinal axis"
+    bl_description = "Rotate grid around its current origin so that the middle of selected item(s) is on a cardinal axis"
 
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        if context.mode != 'EDIT_MESH': return False
-        if context.active_object is None: return False
-
-        data = context.active_object.data
-        bm = bmesh.from_edit_mesh(data)
-
-        if isinstance(bm.select_history.active, bmesh.types.BMVert):
-            return True
-
-        return False
+        return bpy.ops.view3d.snap_cursor_to_selected.poll()
 
     def execute(self, context):
         data = context.active_object.data
         bm = bmesh.from_edit_mesh(data)
 
-        vertex_local = bm.select_history.active.co
-
         up = get_grid_up(context.scene)
         initial_matrix = clear_grid_transform(context, False)
 
-        dg = context.evaluated_depsgraph_get()
 
-        active_object_matrix = context.active_object.evaluated_get(dg).matrix_world
-        vertex = active_object_matrix @ vertex_local
+        # Just use `view3d.snap_cursor_to_selected` and revert the cursor later.
+        cursor_matrix = context.scene.cursor.matrix
+
+        bpy.ops.view3d.snap_cursor_to_selected()
+
+        front = context.scene.cursor.matrix.to_translation()
+
+        # Revert cursor matrix.
+        context.scene.cursor.matrix = cursor_matrix
 
         center = initial_matrix @ mathutils.Vector((0, 0, 0))
-        front = vertex - center
+        front = front - center
 
         matrix = matrix_from_axes_prefer_front(center, up, front)
 
@@ -551,7 +549,7 @@ class ProjectGridOriginToVertex(bpy.types.Operator):
 class SetGridOriginFromActive(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_active"
     bl_label = "Set Local Grid from Active"
-    bl_description = "Center the grid around the active Object, Face, Edge, Vertex, or Bone"
+    bl_description = "Orient and center the grid around the active item"
 
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -844,15 +842,15 @@ class VIEW3D_MT_local_grid(bpy.types.Menu):
 
     def draw(self, _context):
         layout = self.layout
-        layout.operator(ClearGridOrigin.bl_idname, text="Reset")
-        layout.operator(SetGridOriginFromActive.bl_idname, text="Active")
-        layout.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
-        layout.operator(ProjectGridOriginToVertex.bl_idname, text="Project Vertex")
-        layout.operator(AlignToEdge.bl_idname, text="Align Edge")
+        layout.operator(ClearGridOrigin.bl_idname)
+        layout.operator(SetGridOriginFromActive.bl_idname)
+        layout.operator(SetGridOriginFromVertices.bl_idname)
+        layout.operator(ProjectSelected.bl_idname)
+        layout.operator(AlignToEdge.bl_idname)
 
-        layout.operator(TranslateToSelected.bl_idname, text="Selected")
-        layout.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
-        layout.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
+        layout.operator(TranslateToSelected.bl_idname)
+        layout.operator(SetGridOriginFromCursor.bl_idname)
+        layout.operator(ProjectGridOriginToCursor.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
     bl_label = "Local Grid"
@@ -875,7 +873,7 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
 
         # Northwest
-        pie.operator(ProjectGridOriginToVertex.bl_idname, text="Project Selected")
+        pie.operator(ProjectSelected.bl_idname, text="Project Selected")
 
         # Northeast
         pie.operator(AlignToEdge.bl_idname, text="Align Edge")
@@ -894,11 +892,10 @@ classes = [
     ClearGridOrigin,
 
     SetGridOriginFromActive,
-
-    AlignToEdge,
-    ProjectGridOriginToVertex,
     SetGridOriginFromVertices,
+    AlignToEdge,
 
+    ProjectSelected,
     TranslateToSelected,
 
     SetGridOriginFromCursor,
