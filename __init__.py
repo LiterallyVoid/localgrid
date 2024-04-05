@@ -670,9 +670,9 @@ class SetGridOriginFromActive(bpy.types.Operator):
 
         return {'FINISHED'}
 
-class SetGridOriginFromVertices(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_set_vertices"
-    bl_label = "Set Grid Origin From Vertices"
+class TriangulateVertices(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_triangulate_vertices"
+    bl_label = "Triangulate Grid Origin From Vertices"
     bl_description = "Set grid origin from three selected vertices, placing the origin at the third vertex and any cardinal axis on the line between the second and third"
 
     bl_options = {'REGISTER', 'UNDO'}
@@ -844,7 +844,7 @@ class VIEW3D_MT_local_grid(bpy.types.Menu):
         layout = self.layout
         layout.operator(ClearGridOrigin.bl_idname)
         layout.operator(SetGridOriginFromActive.bl_idname)
-        layout.operator(SetGridOriginFromVertices.bl_idname)
+        layout.operator(TriangulateVertices.bl_idname)
         layout.operator(ProjectSelected.bl_idname)
         layout.operator(AlignToEdge.bl_idname)
 
@@ -870,7 +870,7 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
 
         # North
-        pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
+        pie.operator(TriangulateVertices.bl_idname, text="Triangulate Vertices")
 
         # Northwest
         pie.operator(ProjectSelected.bl_idname, text="Project Selected")
@@ -892,7 +892,7 @@ classes = [
     ClearGridOrigin,
 
     SetGridOriginFromActive,
-    SetGridOriginFromVertices,
+    TriangulateVertices,
     AlignToEdge,
 
     ProjectSelected,
