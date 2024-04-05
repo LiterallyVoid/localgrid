@@ -436,6 +436,36 @@ class SetGridOriginFromCursor(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class TranslateToSelected(bpy.types.Operator):
+    bl_idname = "view3d.grid_translate_to_selected"
+    bl_label = "Translate Grid to Selected"
+    bl_description = "Translate grid so that its origin is in the middle of selected item(s)"
+
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.ops.view3d.snap_cursor_to_selected.poll(context)
+
+    def execute(self, context):
+        dg = context.evaluated_depsgraph_get()
+
+        initial_matrix = clear_grid_transform(context, False)
+
+        cursor_matrix = context.scene.cursor.matrix
+
+        bpy.ops.view3d.snap_cursor_to_selected()
+
+        matrix = context.scene.cursor.matrix.copy()
+        context.scene.cursor.matrix = cursor_matrix
+
+        translation = matrix.to_translation()
+        matrix = mathutils.Matrix.Translation(translation) @ initial_matrix.to_quaternion().to_matrix().to_4x4()
+
+        set_grid_transform(context, matrix, initial_matrix)
+
+        return {'FINISHED'}
+
 
 class ProjectGridOriginToCursor(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_project_to_cursor"
@@ -819,6 +849,8 @@ class VIEW3D_MT_local_grid(bpy.types.Menu):
         layout.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
         layout.operator(ProjectGridOriginToVertex.bl_idname, text="Project Vertex")
         layout.operator(AlignToEdge.bl_idname, text="Align Edge")
+
+        layout.operator(TranslateToSelected.bl_idname, text="Selected")
         layout.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
         layout.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
 
@@ -837,22 +869,22 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         pie.operator(SetGridOriginFromActive.bl_idname, text="Active")
 
         # South
-        pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
+        pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
 
         # North
-        pie.operator(ProjectGridOriginToVertex.bl_idname, text="Project Vertex")
+        pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
 
         # Northwest
-        pie.operator(SetGridOriginFromVertices.bl_idname, text="Three Vertices")
+        pie.operator(ProjectGridOriginToVertex.bl_idname, text="Project Selected")
 
         # Northeast
         pie.operator(AlignToEdge.bl_idname, text="Align Edge")
 
         # Southwest
-        pie.separator()
+        pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
 
         # Southeast
-        pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
+        pie.operator(TranslateToSelected.bl_idname, text="Selected")
 
 addon_keymaps = []
 
@@ -862,12 +894,15 @@ classes = [
     ClearGridOrigin,
 
     SetGridOriginFromActive,
-    SetGridOriginFromCursor,
+
+    AlignToEdge,
+    ProjectGridOriginToVertex,
     SetGridOriginFromVertices,
 
+    TranslateToSelected,
+
+    SetGridOriginFromCursor,
     ProjectGridOriginToCursor,
-    ProjectGridOriginToVertex,
-    AlignToEdge,
 
     VIEW3D_MT_local_grid,
     VIEW3D_MT_local_grid_pie,
