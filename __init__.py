@@ -72,6 +72,72 @@ def apply_matrix_to_misc_scene(context, matrix):
     )
     context.scene.display.light_direction = light_direction_matrix.inverted() @ rotation_matrix @ light_direction_matrix @ context.scene.display.light_direction
 
+def apply_matrix_to_area(context, interpolated, window, screen, area, translation, rotation):
+    try:
+        space = area.spaces[0]
+    except:
+        # ???
+        return
+
+    if space.type != 'VIEW_3D':
+        return
+
+    preferences = context.preferences
+    addon_prefs = preferences.addons[__name__].preferences
+
+    rotation_matrix = rotation.to_matrix()
+
+    for region in area.regions:
+        if region.type != 'WINDOW':
+            continue
+
+        if not region.data:
+            continue
+
+        if region.data.view_perspective == 'CAMERA':
+            continue
+
+        order = "XZY"
+
+        view_roll = region.data.view_rotation.to_euler(order).y
+
+        region.data.view_location = rotation_matrix @ region.data.view_location
+        region.data.view_location += translation
+
+        if region.data.is_orthographic_side_view:
+            continue
+
+        old = region.data.view_rotation
+        naive = rotation @ region.data.view_rotation
+
+        if not addon_prefs.reset_roll:
+            region.data.view_rotation = naive
+            continue
+
+        forwards = region.data.view_rotation @ mathutils.Vector((0, 0, 1))
+
+        forwards = rotation @ forwards
+
+        tracked = forwards.to_track_quat('Z', 'Y')
+
+        previous_roll = old.to_euler(order).y
+        # tracked = tracked @ mathutils.Quaternion((0, 1, 0), -previous_roll)
+
+        delta_from_naive = naive.inverted() @ tracked
+        roll = -delta_from_naive.to_euler(order).z
+
+        region.data.view_rotation = naive
+
+        region.data.update()
+
+        # FIXME: Interpolation doesn't work well at all.
+        if interpolated:
+            with context.temp_override(window = window, screen = screen, area = area, view = space, region = region):
+                bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
+        else:
+            region.data.view_rotation = tracked
+
+    
 
 def apply_matrix_to_misc_view(context, matrix, interpolated = True):
     preferences = context.preferences
@@ -80,72 +146,25 @@ def apply_matrix_to_misc_view(context, matrix, interpolated = True):
     matrix = matrix.inverted()
 
     translation, rotation, _ = matrix.decompose()
-    rotation_matrix = rotation.to_matrix()
 
     # Correct the cursor
     context.scene.cursor.matrix = matrix @ context.scene.cursor.matrix
 
-    # Correct the active 3D View's view
-    for screen in context.workspace.screens:
-        for area in screen.areas:
-            try:
-                space = area.spaces[0]
-            except:
-                # ???
-                continue
+    # Correct every 3D view in the active workspace
+    for window in context.window_manager.windows:
+        if window.scene != context.scene:
+            continue
 
-            if space.type != 'VIEW_3D':
-                continue
-
-            for region in area.regions:
-                if region.type != 'WINDOW':
-                    continue
-
-                if not region.data:
-                    continue
-
-                if region.data.view_perspective == 'CAMERA':
-                    continue
-
-                order = "XZY"
-
-                view_roll = region.data.view_rotation.to_euler(order).y
-
-                region.data.view_location = rotation_matrix @ region.data.view_location
-                region.data.view_location += translation
-
-                if region.data.is_orthographic_side_view:
-                    continue
-
-                old = region.data.view_rotation
-                naive = rotation @ region.data.view_rotation
-
-                if not addon_prefs.reset_roll:
-                    region.data.view_rotation = naive
-                    continue
-
-                forwards = region.data.view_rotation @ mathutils.Vector((0, 0, 1))
-
-                forwards = rotation @ forwards
-
-                tracked = forwards.to_track_quat('Z', 'Y')
-
-                previous_roll = old.to_euler(order).y
-                # tracked = tracked @ mathutils.Quaternion((0, 1, 0), -previous_roll)
-
-                delta_from_naive = naive.inverted() @ tracked
-                roll = -delta_from_naive.to_euler(order).z
-
-                region.data.view_rotation = naive
-
-                region.data.update()
-
-                # FIXME: Interpolation doesn't work well at all.
-                if interpolated:
-                    with context.temp_override(screen = screen, area = area, view = space, region = region):
-                        bpy.ops.view3d.view_roll('INVOKE_REGION_WIN', angle = -roll)
-                else:
-                    region.data.view_rotation = tracked
+        for area in window.screen.areas:
+            apply_matrix_to_area(
+                context,
+                interpolated,
+                window,
+                window.screen,
+                area,
+                translation,
+                rotation,
+            )
 
 # Clear grid transform, and return what it was as a Matrix.
 def clear_grid_transform(context, interpolated = True):
