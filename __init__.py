@@ -208,7 +208,7 @@ def remove_scale(matrix: mathutils.Matrix) -> mathutils.Matrix:
 def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix) -> mathutils.Matrix:
     translation, rotation, _ = matrix.decompose()
 
-    cardinal_axes = [
+    candidates = [
         mathutils.Quaternion(),
         mathutils.Quaternion((1, 0, 0), math.pi * 0.5),
         mathutils.Quaternion((1, 0, 0), math.pi),
@@ -217,22 +217,38 @@ def reduce_transform(matrix: mathutils.Matrix, previous_matrix: mathutils.Matrix
         mathutils.Quaternion((0, 1, 0), math.pi * 1.5),
     ]
 
+    for yaw in range(1, 4):
+        for candidate in candidates[0:6]:
+            candidates.append(candidate @ mathutils.Quaternion((0, 0, 1), math.pi * 0.5 * yaw))
+
+    # Rotations: [
+    #    original, +y, -z, -y, +x, -x, (no yaw)
+    #    original, +y, -z, -y, +x, -x, (all yawed 90°)
+    #    original, +y, -z, -y, +x, -x, (all yawed 180°)
+    #    original, +y, -z, -y, +x, -x, (all yawed 270°)
+    # so prioritize index 0, then 6n, then the rest.
+
     scored = []
 
     # @TODO: max(..., key = ...)?
-    for i, mod in enumerate(cardinal_axes):
-        up = rotation @ mod @ mathutils.Vector((0, 0, 1))
+    for i, candidate in enumerate(candidates):
+        total_rotation = rotation @ candidate
 
-        score = up.dot((0, 0, 1))
+        _axis, angle = total_rotation.to_axis_angle()
+        score = angle
 
         # Prefer no orientation change.
-        if i == 0: score += 0.1
+        if i == 0: score -= 0.02
 
-        scored.append((matrix @ mod.to_matrix().to_4x4(), score))
+        # Prefer only yaw.
+        elif i % 6 == 0: score -= 0.01
 
-    scored.sort(key = lambda tup: tup[1])
-    
-    return scored[-1][0]
+        scored.append((matrix @ candidate.to_matrix().to_4x4(), score))
+
+    return min(scored, key = lambda matrix_score: matrix_score[1])[0]
+    # scored.sort(key = lambda tup: tup[1])
+
+    # return scored[-1][0]
 
 # `previous_matrix` will be used to minimize roll.
 def set_grid_transform(context, transform: mathutils.Matrix, previous_matrix: Optional[mathutils.Matrix] = None, interpolated = True, *, move_cursor_to_origin = True):
