@@ -862,25 +862,18 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         # West
         pie.operator(ClearGridOrigin.bl_idname, text="Reset")
-
         # East
         pie.operator(SetGridOriginFromActive.bl_idname, text="Active")
-
         # South
         pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
-
         # North
         pie.operator(TriangulateVertices.bl_idname, text="Triangulate Vertices")
-
         # Northwest
         pie.operator(ProjectSelected.bl_idname, text="Project Selected")
-
         # Northeast
         pie.operator(AlignToEdge.bl_idname, text="Align Edge")
-
         # Southwest
         pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
-
         # Southeast
         pie.operator(TranslateToSelected.bl_idname, text="Selected")
 
