@@ -860,22 +860,38 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         pie = layout.menu_pie()
 
-        # West
-        pie.operator(ClearGridOrigin.bl_idname, text="Reset")
-        # East
-        pie.operator(SetGridOriginFromActive.bl_idname, text="Active")
-        # South
-        pie.operator(SetGridOriginFromCursor.bl_idname, text="Cursor")
-        # North
-        pie.operator(TriangulateVertices.bl_idname, text="Triangulate Vertices")
-        # Northwest
-        pie.operator(ProjectSelected.bl_idname, text="Project Selected")
-        # Northeast
-        pie.operator(AlignToEdge.bl_idname, text="Align Edge")
-        # Southwest
-        pie.operator(ProjectGridOriginToCursor.bl_idname, text="Project Cursor")
-        # Southeast
-        pie.operator(TranslateToSelected.bl_idname, text="Selected")
+        items = [
+            (TranslateToSelected, "Selected"),
+            (TriangulateVertices, "Triangulate Vertices"), (SetGridOriginFromCursor, "Cursor"),
+            (ClearGridOrigin, "Reset"), (SetGridOriginFromActive, "Active"),
+            (AlignToEdge, "Align Edge"), (ProjectGridOriginToCursor, "Project Cursor"), 
+            (ProjectSelected, "Project Selected"),
+        ]
+
+        order = [
+            "W", "E", "S", "N", "NW", "NE", "SW", "SE",
+        ]
+
+        i = 0
+
+        for clazz, text in [
+            # West, East
+            items[3], items[4],
+
+            # South, North
+            items[7], items[0],
+
+            # Northwest, Northeast
+            items[1], items[2],
+
+            # Southwest, Southeast
+            items[5], items[6],
+        ]:
+            print(order[i], text)
+            i += 1
+            pie.operator(clazz.bl_idname, text=text)
+
+
 
 addon_keymaps = []
 
