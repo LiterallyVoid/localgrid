@@ -411,7 +411,7 @@ def bmesh_face_axes(
 
     return (origin, up, front_vector)
 
-class SetGridOriginFromCursor(bpy.types.Operator):
+class Cursor(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_cursor"
     bl_label = "Set Local Grid from Cursor"
     bl_description = "Center grid around the 3D Cursor"
@@ -470,8 +470,8 @@ class TranslateToSelected(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class ProjectGridOriginToCursor(bpy.types.Operator):
-    bl_idname = "view3d.grid_origin_project_to_cursor"
+class ProjectCursor(bpy.types.Operator):
+    bl_idname = "view3d.grid_origin_project_cursor"
     bl_label = "Project Local Grid to Cursor"
     bl_description = "Rotate grid around its current origin so that the 3D Cursor lies on a cardinal axis"
 
@@ -546,7 +546,7 @@ class ProjectSelected(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class SetGridOriginFromActive(bpy.types.Operator):
+class Active(bpy.types.Operator):
     bl_idname = "view3d.grid_origin_set_active"
     bl_label = "Set Local Grid from Active"
     bl_description = "Orient and center the grid around the active item"
@@ -843,14 +843,14 @@ class VIEW3D_MT_local_grid(bpy.types.Menu):
     def draw(self, _context):
         layout = self.layout
         layout.operator(ClearGridOrigin.bl_idname)
-        layout.operator(SetGridOriginFromActive.bl_idname)
+        layout.operator(Active.bl_idname)
         layout.operator(TriangulateVertices.bl_idname)
         layout.operator(ProjectSelected.bl_idname)
         layout.operator(AlignToEdge.bl_idname)
 
         layout.operator(TranslateToSelected.bl_idname)
-        layout.operator(SetGridOriginFromCursor.bl_idname)
-        layout.operator(ProjectGridOriginToCursor.bl_idname)
+        layout.operator(Cursor.bl_idname)
+        layout.operator(ProjectCursor.bl_idname)
 
 class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
     bl_label = "Local Grid"
@@ -862,9 +862,9 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         items = [
             (TranslateToSelected, "Selected"),
-            (TriangulateVertices, "Triangulate Vertices"), (SetGridOriginFromCursor, "Cursor"),
-            (ClearGridOrigin, "Reset"), (SetGridOriginFromActive, "Active"),
-            (AlignToEdge, "Align Edge"), (ProjectGridOriginToCursor, "Project Cursor"), 
+            (TriangulateVertices, "Triangulate Vertices"), (Cursor, "Cursor"),
+            (ClearGridOrigin, "Reset"), (Active, "Active"),
+            (AlignToEdge, "Align Edge"), (ProjectCursor, "Project Cursor"), 
             (ProjectSelected, "Project Selected"),
         ]
 
@@ -900,15 +900,15 @@ classes = [
 
     ClearGridOrigin,
 
-    SetGridOriginFromActive,
+    Active,
     TriangulateVertices,
     AlignToEdge,
 
     ProjectSelected,
     TranslateToSelected,
 
-    SetGridOriginFromCursor,
-    ProjectGridOriginToCursor,
+    Cursor,
+    ProjectCursor,
 
     VIEW3D_MT_local_grid,
     VIEW3D_MT_local_grid_pie,
