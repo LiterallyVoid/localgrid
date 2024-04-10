@@ -305,13 +305,13 @@ class GridSnapAddonPreferences(bpy.types.AddonPreferences):
 
     reset_roll: bpy.props.BoolProperty(
         name="Reset Camera Roll",
-        description="Roll the camera so that it points up whenever the grid is changed. This makes navigation easier if your orbit method is Turntable; otherwise it can be disorienting",
+        description="Roll the view so that it points up whenever the grid is changed. This makes navigation easier if your orbit method is Turntable; otherwise it can be disorienting",
         default=True
     )
 
     minimize_roll: bpy.props.BoolProperty(
         name="Minimize Roll",
-        description="Instead of always aligning the +Z axis to the object or face, choose an arbitrary axis to face up that minimizes camera roll",
+        description="Instead of always aligning the +Z axis to the object or face, allow choosing a different Z axis to minimize the angle to the world's coordinate space",
         default=True
     )
 
