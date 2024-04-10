@@ -902,9 +902,6 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
             pie.operator(clazz.bl_idname, text=text, icon=icon)
 
 
-
-addon_keymaps = []
-
 classes = [
     GridSnapAddonPreferences,
 
@@ -924,9 +921,13 @@ classes = [
     VIEW3D_MT_local_grid_pie,
 ]
 
+addon_keymaps = []
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+
+    bpy.types.VIEW3D_MT_view.append(menu_func)
 
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon:
@@ -935,8 +936,6 @@ def register():
         kmi = km.keymap_items.new('wm.call_menu_pie', 'Y', 'PRESS', ctrl=True)
         kmi.properties.name = 'VIEW3D_MT_local_grid_pie'
         addon_keymaps.append((km, kmi))
-
-    bpy.types.VIEW3D_MT_view.append(menu_func)
 
     bpy.app.handlers.undo_pre.append(history_pre_handler)
     bpy.app.handlers.undo_post.append(history_post_handler)
