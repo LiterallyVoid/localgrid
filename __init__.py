@@ -866,11 +866,18 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         pie = layout.menu_pie()
 
         items = [
-            (TranslateToSelected, "Selected"),
-            (TriangulateVertices, "Triangulate Vertices"), (Cursor, "Cursor"),
-            (ClearGridOrigin, "Reset"), (Active, "Active"),
-            (AlignToEdge, "Align Edge"), (ProjectCursor, "Project Cursor"), 
-            (ProjectSelected, "Project Selected"),
+            (TranslateToSelected, "Selected", 'RESTRICT_SELECT_OFF'),
+
+            (TriangulateVertices, "Triangulate Vertices", 'VERTEXSEL'),
+            (Cursor, "Cursor", 'CURSOR'),
+
+            (ClearGridOrigin, "Reset", 'WORLD'),
+            (Active, "Active", 'PIVOT_ACTIVE'),
+
+            (AlignToEdge, "Align Edge", 'EDGESEL'),
+            (ProjectCursor, "Project Cursor", 'CURSOR'),
+
+            (ProjectSelected, "Project Selected", 'RESTRICT_SELECT_OFF'),
         ]
 
         order = [
@@ -879,7 +886,7 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
 
         i = 0
 
-        for clazz, text in [
+        for clazz, text, icon in [
             # West, East
             items[3], items[4],
 
@@ -892,9 +899,7 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
             # Southwest, Southeast
             items[5], items[6],
         ]:
-            print(order[i], text)
-            i += 1
-            pie.operator(clazz.bl_idname, text=text)
+            pie.operator(clazz.bl_idname, text=text, icon=icon)
 
 
 
