@@ -666,6 +666,11 @@ class Active(bpy.types.Operator):
         else:
             matrix = active_object_matrix
 
+            # Blender runs on an assumption of a Z-up, Y-forwards space, but camera matrices are Z-backwards and Y-up.
+            # Rotate camera matrices so that moving things up/down still works.
+            if context.active_object.type == 'CAMERA':
+                matrix @= mathutils.Quaternion((1, 0, 0), -math.pi * 0.5).to_matrix().to_4x4()
+
         set_grid_transform(context, matrix, initial_matrix, interpolated = True)
 
         return {'FINISHED'}
