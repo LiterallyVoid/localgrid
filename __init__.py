@@ -28,7 +28,8 @@ bl_info = {
     "category": "3D View",
 }
 
-import bpy, mathutils, bmesh, math
+import bpy, mathutils, bmesh, math, os
+import bpy.utils.previews
 from typing import Optional
 from bpy.app.handlers import persistent
 
@@ -46,7 +47,6 @@ def create_transformed_empty(context, matrix: mathutils.Matrix):
 
     if empty.parent:
         # This maybe happened in testing. I'm almost positive that it was because of me changing the addon, but if this ever happens then it will be very bad.
-        print("This should never happen!")
         empty.parent = None
 
     context.scene.collection.objects.link(empty)
@@ -629,8 +629,6 @@ class Active(bpy.types.Operator):
                     initial_rotation @ up
                 )
 
-                print(up.dot(front))
-
                 matrix = matrix_from_axes_prefer_up(origin, up, front)
 
 
@@ -823,8 +821,6 @@ def history_pre_handler(scene):
 def history_post_handler(scene):
     global history_pre_matrix
 
-    print("hist post", scene.grid_origin)
-    
     if scene.grid_origin:
         matrix = scene.grid_origin.matrix_world
     else:
@@ -868,13 +864,14 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
         items = [
             (TranslateToSelected, "Selected", 'RESTRICT_SELECT_OFF'),
 
-            (TriangulateVertices, "Triangulate Vertices", 'VERTEXSEL'),
+            # Icon names are a suggestion.
+            (TriangulateVertices, "Triangulate Vertices", 'MOD_SIMPLIFY'),
             (Cursor, "Cursor", 'CURSOR'),
 
             (ClearGridOrigin, "Reset", 'WORLD'),
             (Active, "Active", 'PIVOT_ACTIVE'),
 
-            (AlignToEdge, "Align Edge", 'EDGESEL'),
+            (AlignToEdge, "Align Edge", 'MOD_LENGTH'),
             (ProjectCursor, "Project Cursor", 'CURSOR'),
 
             (ProjectSelected, "Project Selected", 'RESTRICT_SELECT_OFF'),
@@ -899,7 +896,13 @@ class VIEW3D_MT_local_grid_pie(bpy.types.Menu):
             # Southwest, Southeast
             items[5], items[6],
         ]:
-            pie.operator(clazz.bl_idname, text=text, icon=icon)
+            kw = {}
+            if isinstance(icon, str):
+                kw["icon"] = icon
+            elif isinstance(icon, int):
+                kw["icon_value"] = icon
+
+            pie.operator(clazz.bl_idname, text=text, **kw)
 
 
 classes = [
@@ -922,12 +925,19 @@ classes = [
 ]
 
 addon_keymaps = []
+addon_icons = None
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
     bpy.types.VIEW3D_MT_view.append(menu_func)
+
+    bpy.app.handlers.undo_pre.append(history_pre_handler)
+    bpy.app.handlers.undo_post.append(history_post_handler)
+
+    bpy.app.handlers.redo_pre.append(history_pre_handler)
+    bpy.app.handlers.redo_post.append(history_post_handler)
 
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon:
@@ -937,23 +947,9 @@ def register():
         kmi.properties.name = 'VIEW3D_MT_local_grid_pie'
         addon_keymaps.append((km, kmi))
 
-    bpy.app.handlers.undo_pre.append(history_pre_handler)
-    bpy.app.handlers.undo_post.append(history_post_handler)
-
-    bpy.app.handlers.redo_pre.append(history_pre_handler)
-    bpy.app.handlers.redo_post.append(history_post_handler)
-
 def unregister():
     for cls in classes:
         bpy.utils.unregister_class(cls)
-
-    wm = bpy.context.window_manager
-    kc = wm.keyconfigs.addon
-    if kc:
-        for km, kmi in addon_keymaps:
-            km.keymap_items.remove(kmi)
-
-    addon_keymaps.clear()
 
     bpy.types.VIEW3D_MT_view.remove(menu_func)
 
@@ -962,3 +958,11 @@ def unregister():
 
     bpy.app.handlers.redo_pre.remove(history_pre_handler)
     bpy.app.handlers.redo_post.remove(history_post_handler)
+
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon
+    if kc:
+        for km, kmi in addon_keymaps:
+            km.keymap_items.remove(kmi)
+
+    addon_keymaps.clear()
