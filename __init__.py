@@ -925,7 +925,6 @@ classes = [
 ]
 
 addon_keymaps = []
-addon_icons = None
 
 def register():
     for cls in classes:
